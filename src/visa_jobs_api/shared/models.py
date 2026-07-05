@@ -26,4 +26,5 @@ class NormalizedJob(BaseModel):
     country: str | None
     location_label: str
     tech_stack: list[str] = Field(default_factory=list)
+    role_group: str = "Other"
     visa_reason: str

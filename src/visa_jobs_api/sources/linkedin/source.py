@@ -96,6 +96,9 @@ class LinkedInSource:
         # country deterministically; the LLM's guess is only a fallback for
         # when that's missing or unresolvable (e.g. "Remote").
         country = country_from_location(candidate.card.location) or verdict.country
+        # There's no regex-based tech detector for LinkedIn descriptions
+        # (unlike HN), so the LLM's reading of the text is the only source
+        # for tech_stack here.
         return NormalizedJob(
             source=self.name,
             title=candidate.card.title,
@@ -104,6 +107,7 @@ class LinkedInSource:
             posted_at=datetime.combine(candidate.card.posted_on, time.min, tzinfo=timezone.utc),
             country=country,
             location_label=candidate.card.location or "Not specified",
-            tech_stack=[],
+            tech_stack=verdict.tech_stack,
+            role_group=verdict.role_group,
             visa_reason=verdict.reason,
         )

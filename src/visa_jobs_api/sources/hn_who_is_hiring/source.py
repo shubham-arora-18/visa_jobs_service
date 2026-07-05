@@ -90,6 +90,10 @@ class HnWhoIsHiringSource:
                 "HN candidate %d (%s) rejected by LLM: %s", candidate.comment_id, candidate.company, verdict.reason
             )
             return None
+        # The regex-based tech-stack detector (extract._detect_tech_stack)
+        # only recognizes a fixed list of well-known technologies; when it
+        # finds nothing, fall back to the LLM's own reading of the text
+        # rather than showing an empty "not mentioned" tech list.
         return NormalizedJob(
             source=self.name,
             title=candidate.role_line,
@@ -98,6 +102,7 @@ class HnWhoIsHiringSource:
             posted_at=candidate.posted_at,
             country=verdict.country,
             location_label=candidate.location or "Not specified",
-            tech_stack=candidate.tech_stack,
+            tech_stack=candidate.tech_stack or verdict.tech_stack,
+            role_group=verdict.role_group,
             visa_reason=verdict.reason,
         )

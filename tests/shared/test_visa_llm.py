@@ -48,6 +48,37 @@ async def test_confirm_visa_offer_country_defaults_to_none_when_omitted() -> Non
     assert verdict.country is None
 
 
+async def test_confirm_visa_offer_tech_stack_and_role_group_default_when_omitted() -> None:
+    client = _make_client(_mock_completion_returning('{"offers_sponsorship": true, "reason": "explicit offer"}'))
+
+    verdict = await confirm_visa_offer(client=client, system_prompt=_SYSTEM_PROMPT, full_text="text", mentions=[])
+
+    assert verdict.tech_stack == []
+    assert verdict.role_group == "Other"
+
+
+async def test_confirm_visa_offer_parses_tech_stack_and_role_group() -> None:
+    client = _make_client(
+        _mock_completion_returning(
+            '{"offers_sponsorship": true, "reason": "ok", "tech_stack": ["Python", "Django"], "role_group": "Backend"}'
+        )
+    )
+
+    verdict = await confirm_visa_offer(client=client, system_prompt=_SYSTEM_PROMPT, full_text="text", mentions=[])
+
+    assert verdict.tech_stack == ["Python", "Django"]
+    assert verdict.role_group == "Backend"
+
+
+async def test_confirm_visa_offer_raises_on_invalid_role_group_value() -> None:
+    # Strict validation: an out-of-vocabulary role_group must fail loudly
+    # rather than being silently coerced into "Other".
+    client = _make_client(_mock_completion_returning('{"offers_sponsorship": true, "reason": "ok", "role_group": "DevOps"}'))
+
+    with pytest.raises(VisaLlmError, match="didn't match the expected schema"):
+        await confirm_visa_offer(client=client, system_prompt=_SYSTEM_PROMPT, full_text="text", mentions=[])
+
+
 async def test_confirm_visa_offer_raises_on_api_error() -> None:
     client = _make_client(openai.APIConnectionError(request=MagicMock()))
 
@@ -110,3 +141,5 @@ async def test_system_prompt_appends_country_instruction() -> None:
 
     sent_system_prompt = client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
     assert "infer the single country" in sent_system_prompt
+    assert "role_group" in sent_system_prompt
+    assert "Frontend" in sent_system_prompt and "Backend" in sent_system_prompt and "Fullstack" in sent_system_prompt

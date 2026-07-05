@@ -67,7 +67,8 @@ async def test_fetch_jobs_returns_only_confirmed_candidates_within_window(monkey
     llm_client = MagicMock()
     llm_client.chat.completions.create = AsyncMock(
         return_value=_mock_completion_returning(
-            '{"offers_sponsorship": true, "reason": "explicit offer", "country": "Germany"}'
+            '{"offers_sponsorship": true, "reason": "explicit offer", "country": "Germany", '
+            '"tech_stack": ["Go"], "role_group": "Backend"}'
         )
     )
     monkeypatch.setattr("visa_jobs_api.sources.hn_who_is_hiring.source.build_client", lambda hf_token: llm_client)
@@ -89,6 +90,39 @@ async def test_fetch_jobs_returns_only_confirmed_candidates_within_window(monkey
     assert jobs[0].country == "Germany"
     assert jobs[0].source == "hn_who_is_hiring"
     assert llm_client.chat.completions.create.call_count == 1
+    # The posting text ("We offer visa sponsorship.") has no regex-recognized
+    # tech keyword, so the LLM's guess is used instead of an empty list.
+    assert jobs[0].tech_stack == ["Go"]
+    assert jobs[0].role_group == "Backend"
+
+
+async def test_fetch_jobs_prefers_regex_detected_tech_stack_over_llm_guess(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = _item_payload()
+    payload["children"][0]["text"] = "Acme | Backend Engineer | Berlin, Germany\n\nWe use Python. We offer visa sponsorship."
+
+    llm_client = MagicMock()
+    llm_client.chat.completions.create = AsyncMock(
+        return_value=_mock_completion_returning(
+            '{"offers_sponsorship": true, "reason": "explicit offer", "country": "Germany", '
+            '"tech_stack": ["Rust"], "role_group": "Backend"}'
+        )
+    )
+    monkeypatch.setattr("visa_jobs_api.sources.hn_who_is_hiring.source.build_client", lambda hf_token: llm_client)
+
+    with respx.mock:
+        respx.get(ALGOLIA_SEARCH_URL).mock(
+            return_value=httpx.Response(200, json={"hits": [{"objectID": "48357725", "title": "Ask HN: Who is hiring?"}]})
+        )
+        respx.get(f"{ALGOLIA_ITEM_URL}/48357725").mock(return_value=httpx.Response(200, json=payload))
+
+        async with httpx.AsyncClient() as http_client:
+            source = HnWhoIsHiringSource(settings=_settings(), http_client=http_client)
+            jobs = await source.fetch_jobs()
+
+    # The posting text literally mentions "Python" -- the regex detector's
+    # finding is authoritative and must not be overridden by the LLM's
+    # different guess ("Rust").
+    assert jobs[0].tech_stack == ["Python"]
 
 
 async def test_fetch_jobs_excludes_candidates_the_llm_rejects(monkeypatch: pytest.MonkeyPatch) -> None:

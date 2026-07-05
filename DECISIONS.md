@@ -91,6 +91,36 @@ with different system-prompt wording. Merged into:
   sources' prompts can't drift out of sync on what shape the model must
   respond in.
 
+## Tech stack and role-group fallback (post-launch follow-up)
+
+After the first real email, "Tech: not mentioned" showed up for a LinkedIn
+job -- LinkedIn never had any tech-stack detection at all (`tech_stack=[]`
+was hardcoded in `sources/linkedin/source.py`), unlike HN, which has a
+regex-based `_detect_tech_stack` keyword table. Rather than build a second
+regex keyword table for LinkedIn, extended the same shared LLM call
+(`shared/visa_llm.confirm_visa_offer`) to also return `tech_stack` (the
+technologies/languages/frameworks it can find in the text) and `role_group`
+(`Frontend`/`Backend`/`Fullstack`/`Other`) -- one more field each in the
+same JSON response, no extra LLM round-trip.
+
+- **HN**: keeps its regex-based `_detect_tech_stack` as authoritative when
+  it finds something (it's reading literal text, not guessing); falls back
+  to the LLM's tech_stack only when the regex table finds nothing.
+- **LinkedIn**: always uses the LLM's tech_stack, since there's no
+  regex-based detector there to prefer.
+- **role_group** is a new field with no prior regex equivalent in either
+  source, so it always comes from the LLM.
+- `role_group` is a strict `Literal["Frontend", "Backend", "Fullstack",
+  "Other"]` on the LLM-response model -- an out-of-vocabulary value from the
+  model fails validation loudly (same "no tolerant parsing" principle as
+  everywhere else) rather than being silently coerced. The prompt is
+  explicit that "Other" is the correct answer when unsure, to minimize how
+  often that happens in practice.
+- Verified against the real Hugging Face endpoint (not just mocked tests):
+  a sample Backend/Python/Django/PostgreSQL posting correctly returned
+  `tech_stack: ["Python", "Django", "PostgreSQL"]` and `role_group:
+  "Backend"`.
+
 ## Country grouping (requirement: group by country, then sort)
 
 LinkedIn's location field is reliably structured ("City, Region, Country"),
@@ -214,7 +244,10 @@ rather than having this service replace or wrap job_digest's scheduled run.
 - API layer: router (200/502 paths) and service layer (success email +
   summary vs. failure email + re-raise) with the aggregator/emailer mocked
   out.
-- All 70 tests pass locally (`pytest`).
+- All 77 tests pass locally (`pytest`) -- 70 from the initial build plus 7
+  added for the tech-stack/role-group fallback behavior (regex-wins-when-present
+  for HN, LLM-always for LinkedIn, strict role_group validation, and the
+  digest HTML actually showing them).
 
 ## Verified end-to-end locally
 

@@ -49,6 +49,30 @@ async def _fake_http_client() -> httpx.AsyncClient:
     return httpx.AsyncClient()
 
 
+async def test_fetch_jobs_uses_the_llms_tech_stack_and_role_group(monkeypatch: pytest.MonkeyPatch) -> None:
+    # LinkedIn has no regex-based tech detector at all, unlike HN -- the
+    # LLM's reading of the description is the only source for these fields.
+    card = _card(location="Dublin, Ireland")
+    candidate = LinkedInJobCandidate(card=card, description="We use React and Node.js. We offer visa sponsorship.", language="en")
+
+    monkeypatch.setattr("visa_jobs_api.sources.linkedin.source.fetch_all_job_cards", AsyncMock(return_value=[card]))
+    monkeypatch.setattr(
+        "visa_jobs_api.sources.linkedin.source.fetch_all_descriptions", AsyncMock(return_value=[candidate])
+    )
+    llm_client = _make_llm_client(
+        '{"offers_sponsorship": true, "reason": "explicit offer", "country": "Ireland", '
+        '"tech_stack": ["React", "Node.js"], "role_group": "Frontend"}'
+    )
+    monkeypatch.setattr("visa_jobs_api.sources.linkedin.source.build_client", lambda hf_token: llm_client)
+
+    async with httpx.AsyncClient() as http_client:
+        source = LinkedInSource(settings=_settings(), http_client=http_client)
+        jobs = await source.fetch_jobs()
+
+    assert jobs[0].tech_stack == ["React", "Node.js"]
+    assert jobs[0].role_group == "Frontend"
+
+
 async def test_fetch_jobs_confirms_english_candidate_and_uses_structured_country(monkeypatch: pytest.MonkeyPatch) -> None:
     card = _card(location="Dublin, Ireland")
     candidate = LinkedInJobCandidate(card=card, description="We offer visa sponsorship.", language="en")

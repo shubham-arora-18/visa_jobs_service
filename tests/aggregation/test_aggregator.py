@@ -21,6 +21,8 @@ def _job(
     company: str = "Acme",
     country: str | None = "Ireland",
     posted_at: datetime | None = None,
+    tech_stack: list[str] | None = None,
+    role_group: str = "Other",
 ) -> NormalizedJob:
     return NormalizedJob(
         source=source,
@@ -30,7 +32,8 @@ def _job(
         posted_at=posted_at or datetime(2026, 7, 4, tzinfo=timezone.utc),
         country=country,
         location_label=country or "Not specified",
-        tech_stack=[],
+        tech_stack=tech_stack or [],
+        role_group=role_group,
         visa_reason="explicit offer",
     )
 
@@ -103,6 +106,25 @@ def test_render_digest_html_includes_headline_and_country_sections() -> None:
     assert digest_headline(1, posted_within_hours=24) in html_body
     assert "Ireland" in html_body
     assert "Backend Role" in html_body
+
+
+def test_render_digest_html_shows_tech_stack_and_role_group() -> None:
+    jobs = [_job(tech_stack=["Python", "Django"], role_group="Backend")]
+    grouped = group_and_sort_by_country(jobs)
+
+    html_body = render_digest_html(grouped, posted_within_hours=24)
+
+    assert "Python, Django" in html_body
+    assert "Backend" in html_body
+
+
+def test_render_digest_html_shows_not_mentioned_only_when_tech_stack_truly_empty() -> None:
+    jobs = [_job(tech_stack=[])]
+    grouped = group_and_sort_by_country(jobs)
+
+    html_body = render_digest_html(grouped, posted_within_hours=24)
+
+    assert "Tech: not mentioned" in html_body
 
 
 def test_render_digest_html_shows_a_message_when_there_are_no_jobs() -> None:

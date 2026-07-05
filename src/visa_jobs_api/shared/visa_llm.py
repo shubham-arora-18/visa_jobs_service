@@ -5,10 +5,12 @@ over-selects (e.g. it can't tell "sponsored by prominent executives" from a
 real visa offer). This module re-checks each regex-flagged candidate with a
 small LLM call via Hugging Face's Inference Providers router, keeping only
 genuine offers -- and, in the same call, asks for a best-effort country
-guess (see _COUNTRY_INSTRUCTION), so sources with unstructured location text
-(e.g. HN's freeform posting headers) can still be grouped by country
-without a second LLM round-trip. Not a guarantee either way -- results
-should be spot-checked, not treated as authoritative.
+guess, a tech-stack guess, and a role-group classification (see
+_ADDITIONAL_FIELDS_INSTRUCTION), so sources with unstructured/absent
+location or tech-stack signal (e.g. HN's freeform posting headers, or
+LinkedIn, which has no regex-based tech detection at all) can still be
+grouped and labeled without a second LLM round-trip. Not a guarantee either
+way -- results should be spot-checked, not treated as authoritative.
 
 Each source supplies only its own domain-specific screening criteria as
 `system_prompt`; this module owns the output-format contract (the JSON
@@ -20,17 +22,20 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Literal
 
 import openai
 from openai import AsyncOpenAI
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 logger = logging.getLogger(__name__)
 
 HF_ROUTER_BASE_URL = "https://router.huggingface.co/v1"
 DEFAULT_MODEL = "Qwen/Qwen3-4B-Instruct-2507:nscale"
 
-_COUNTRY_INSTRUCTION = (
+RoleGroup = Literal["Frontend", "Backend", "Fullstack", "Other"]
+
+_ADDITIONAL_FIELDS_INSTRUCTION = (
     "\n\nAlso infer the single country most associated with where this "
     "specific role is based, using any location/office/timezone information "
     'mentioned in the text (city, region, or an explicit country name). Use '
@@ -38,20 +43,30 @@ _COUNTRY_INSTRUCTION = (
     '"Ireland"). If the role is remote with no identifiable country, or no '
     "location information is given at all, use null -- do not guess a "
     "country with no supporting textual evidence.\n\n"
+    "Also identify the specific technologies, languages, or frameworks "
+    'explicitly named in the text (e.g. ["Python", "React", "PostgreSQL"] -- '
+    "empty list if none are named), and classify the role into exactly one "
+    'of "Frontend", "Backend", "Fullstack", or "Other" (use "Other" for '
+    "non-engineering roles, or when the role's focus genuinely can't be "
+    "determined from the text -- don't guess between Frontend/Backend/"
+    "Fullstack without real evidence).\n\n"
     'Respond with strict JSON only, no other text: {"offers_sponsorship": true '
     'or false, "reason": "one sentence explanation", "country": "Country Name" '
-    "or null}"
+    'or null, "tech_stack": ["Tech1", "Tech2"], "role_group": "Frontend" or '
+    '"Backend" or "Fullstack" or "Other"}'
 )
 
 
 class LlmVerdict(BaseModel):
-    """The model's judgment on whether a posting is a genuine sponsorship offer, plus a best-effort country."""
+    """The model's judgment on a posting: sponsorship, country, tech stack, and role group."""
 
     model_config = ConfigDict(frozen=True)
 
     offers_sponsorship: bool
     reason: str
     country: str | None = None
+    tech_stack: list[str] = Field(default_factory=list)
+    role_group: RoleGroup = "Other"
 
 
 class VisaLlmError(RuntimeError):
@@ -89,9 +104,9 @@ async def confirm_visa_offer(
     model: str = DEFAULT_MODEL,
     log_context: str = "",
 ) -> LlmVerdict:
-    """Ask the LLM whether a candidate posting is a genuine sponsorship offer, and its likely country."""
+    """Ask the LLM whether a candidate posting is a genuine sponsorship offer, its country, tech stack, and role group."""
     user_prompt = _build_user_prompt(full_text=full_text, mentions=mentions, supporting_context=supporting_context or [])
-    full_system_prompt = system_prompt + _COUNTRY_INSTRUCTION
+    full_system_prompt = system_prompt + _ADDITIONAL_FIELDS_INSTRUCTION
     context_suffix = f" for {log_context}" if log_context else ""
 
     try:
