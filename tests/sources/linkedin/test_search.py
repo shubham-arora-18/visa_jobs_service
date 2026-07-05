@@ -1,0 +1,97 @@
+from __future__ import annotations
+
+from datetime import date
+
+import httpx
+import pytest
+
+from visa_jobs_api.config import Settings
+from visa_jobs_api.sources.linkedin.models import SearchQuery
+from visa_jobs_api.sources.linkedin.search import _parse_job_cards, fetch_all_job_cards
+
+
+def _card_html(job_id: str, title: str, company: str, location: str, posted_on: str) -> str:
+    return f"""
+    <li>
+      <div data-entity-urn="urn:li:jobPosting:{job_id}">
+        <div class="base-search-card__info">
+          <h3>{title}</h3>
+          <a class="hidden-nested-link">{company}</a>
+          <span class="job-search-card__location">{location}</span>
+          <time datetime="{posted_on}"></time>
+        </div>
+      </div>
+    </li>
+    """
+
+
+def _page_html(cards: list[str]) -> str:
+    return f"<ul>{''.join(cards)}</ul>"
+
+
+def _settings(**overrides: object) -> Settings:
+    defaults: dict[str, object] = dict(
+        hf_token="fake",
+        gmail_address="a@b.com",
+        gmail_app_password="pw",
+        digest_recipients="me@example.com",
+        brightdata_api_key="bd-key",
+        brightdata_zone="zone",
+        linkedin_posts_per_page=2,
+        linkedin_max_pages_per_query=3,
+        linkedin_search_concurrency=5,
+    )
+    defaults.update(overrides)
+    return Settings(**defaults)
+
+
+def test_parse_job_cards_extracts_all_fields() -> None:
+    html = _page_html([_card_html("123", "Software Engineer", "Acme", "Dublin, Ireland", "2026-07-04")])
+
+    cards = _parse_job_cards(html)
+
+    assert len(cards) == 1
+    assert cards[0].title == "Software Engineer"
+    assert cards[0].company == "Acme"
+    assert cards[0].location == "Dublin, Ireland"
+    assert cards[0].posted_on == date(2026, 7, 4)
+    assert cards[0].url == "https://www.linkedin.com/jobs/view/123/"
+
+
+def test_parse_job_cards_skips_cards_missing_a_date() -> None:
+    html = """
+    <li><div data-entity-urn="urn:li:jobPosting:1"><div class="base-search-card__info">
+      <h3>No Date Job</h3>
+    </div></div></li>
+    """
+    assert _parse_job_cards(html) == []
+
+
+async def test_fetch_all_job_cards_stops_after_a_partial_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    # post_per_page=2: page 0 full (2 cards) -> continue; page 1 partial (1
+    # card) -> stop, never fetch page 2.
+    pages = [
+        _page_html(
+            [
+                _card_html("1", "Job 1", "Acme", "Dublin, Ireland", "2026-07-04"),
+                _card_html("2", "Job 2", "Acme", "Dublin, Ireland", "2026-07-04"),
+            ]
+        ),
+        _page_html([_card_html("3", "Job 3", "Acme", "Dublin, Ireland", "2026-07-04")]),
+    ]
+    call_count = 0
+
+    async def fake_fetch_html(client, url, **kwargs):
+        nonlocal call_count
+        page = pages[call_count]
+        call_count += 1
+        return page
+
+    monkeypatch.setattr("visa_jobs_api.sources.linkedin.search.fetch_html", fake_fetch_html)
+
+    settings = _settings()
+    async with httpx.AsyncClient() as client:
+        cards = await fetch_all_job_cards(client, [SearchQuery(keywords="Python", location="Ireland")], settings=settings)
+
+    assert len(cards) == 3
+    assert call_count == 2  # never fetched the (nonexistent) page 2
