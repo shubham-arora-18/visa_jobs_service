@@ -26,7 +26,7 @@ from typing import Literal
 
 import openai
 from openai import AsyncOpenAI
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,7 @@ HF_ROUTER_BASE_URL = "https://router.huggingface.co/v1"
 DEFAULT_MODEL = "Qwen/Qwen3-4B-Instruct-2507:nscale"
 
 RoleGroup = Literal["Frontend", "Backend", "Fullstack", "Other"]
+_VALID_ROLE_GROUPS = {"Frontend", "Backend", "Fullstack", "Other"}
 
 _ADDITIONAL_FIELDS_INSTRUCTION = (
     "\n\nAlso infer the single country most associated with where this "
@@ -67,6 +68,25 @@ class LlmVerdict(BaseModel):
     country: str | None = None
     tech_stack: list[str] = Field(default_factory=list)
     role_group: RoleGroup = "Other"
+
+    @field_validator("role_group", mode="before")
+    @classmethod
+    def _coerce_unrecognized_role_group_to_other(cls, value: object) -> object:
+        # role_group is a closed vocabulary, but in practice the model
+        # occasionally returns a more specific label anyway (e.g. "Data
+        # Engineering" instead of "Backend"/"Other", observed in production
+        # on a real week-window run) -- a labeling nuance, not a sign the
+        # response is malformed. Unlike offers_sponsorship/reason/country
+        # (where a type mismatch really would mean something is broken),
+        # failing the entire job -- and by extension the whole digest run,
+        # since one job's ValidationError aborts collect_jobs for both
+        # sources -- over an imprecise category label is a wildly
+        # disproportionate cost. Coerce to "Other" with a loud log line
+        # instead of raising.
+        if value not in _VALID_ROLE_GROUPS:
+            logger.warning("LLM returned unrecognized role_group %r -- treating as 'Other'", value)
+            return "Other"
+        return value
 
 
 class VisaLlmError(RuntimeError):

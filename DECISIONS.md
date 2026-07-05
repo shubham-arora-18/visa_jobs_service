@@ -110,16 +110,32 @@ same JSON response, no extra LLM round-trip.
   regex-based detector there to prefer.
 - **role_group** is a new field with no prior regex equivalent in either
   source, so it always comes from the LLM.
-- `role_group` is a strict `Literal["Frontend", "Backend", "Fullstack",
-  "Other"]` on the LLM-response model -- an out-of-vocabulary value from the
-  model fails validation loudly (same "no tolerant parsing" principle as
-  everywhere else) rather than being silently coerced. The prompt is
-  explicit that "Other" is the correct answer when unsure, to minimize how
-  often that happens in practice.
 - Verified against the real Hugging Face endpoint (not just mocked tests):
   a sample Backend/Python/Django/PostgreSQL posting correctly returned
   `tech_stack: ["Python", "Django", "PostgreSQL"]` and `role_group:
   "Backend"`.
+
+**Revised after a real production failure.** `role_group` started as a
+strict `Literal["Frontend", "Backend", "Fullstack", "Other"]` -- an
+out-of-vocabulary value would fail validation loudly, same as everywhere
+else in the codebase. In practice, a real `posted_within: "week"` run
+against the live model returned `role_group: "Data Engineering"` for a
+genuine, correctly-identified Python/Spark/Databricks posting -- and that
+single `ValidationError` aborted the *entire* digest run (both sources,
+since one job's exception propagates out of `collect_jobs`'s
+`asyncio.gather`), discarding every other confirmed sponsoring job found
+that week and sending a failure email instead of the real digest.
+
+That's a disproportionate cost for what is actually just an imprecise
+label, not a broken response -- `offers_sponsorship`, `reason`, and
+`country` were all still correctly parsed on that same response. Added a
+`field_validator(mode="before")` on `role_group` specifically: an
+unrecognized value is now coerced to `"Other"` with a `logger.warning`
+(visible, not silent) instead of raising. The other fields keep strict
+validation -- a type mismatch on `offers_sponsorship` (e.g. a string
+instead of a bool) really would indicate a broken/hallucinated response,
+which is a meaningfully different situation from the model using a more
+specific job-title-like label than the four buckets we gave it.
 
 ## Country grouping (requirement: group by country, then sort)
 
@@ -274,7 +290,7 @@ rather than having this service replace or wrap job_digest's scheduled run.
   out.
 - All 85 tests pass locally (`pytest`) -- 70 from the initial build, 7 for
   the tech-stack/role-group fallback behavior (regex-wins-when-present for
-  HN, LLM-always for LinkedIn, strict role_group validation, and the digest
+  HN, LLM-always for LinkedIn, graceful role_group coercion, and the digest
   HTML actually showing them), and 8 more for the `linkedin_keywords` /
   `posted_within` request inputs (DTO resolution, router pass-through,
   `build_search_queries`).

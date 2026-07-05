@@ -70,13 +70,18 @@ async def test_confirm_visa_offer_parses_tech_stack_and_role_group() -> None:
     assert verdict.role_group == "Backend"
 
 
-async def test_confirm_visa_offer_raises_on_invalid_role_group_value() -> None:
-    # Strict validation: an out-of-vocabulary role_group must fail loudly
-    # rather than being silently coerced into "Other".
-    client = _make_client(_mock_completion_returning('{"offers_sponsorship": true, "reason": "ok", "role_group": "DevOps"}'))
+async def test_confirm_visa_offer_coerces_unrecognized_role_group_to_other() -> None:
+    # Observed in production: the model sometimes returns a more specific
+    # label (e.g. "Data Engineering") instead of one of our four buckets.
+    # That's an imprecise category, not a malformed response -- it must not
+    # abort the whole job (and by extension the whole digest run).
+    client = _make_client(
+        _mock_completion_returning('{"offers_sponsorship": true, "reason": "ok", "role_group": "Data Engineering"}')
+    )
 
-    with pytest.raises(VisaLlmError, match="didn't match the expected schema"):
-        await confirm_visa_offer(client=client, system_prompt=_SYSTEM_PROMPT, full_text="text", mentions=[])
+    verdict = await confirm_visa_offer(client=client, system_prompt=_SYSTEM_PROMPT, full_text="text", mentions=[])
+
+    assert verdict.role_group == "Other"
 
 
 async def test_confirm_visa_offer_raises_on_api_error() -> None:
