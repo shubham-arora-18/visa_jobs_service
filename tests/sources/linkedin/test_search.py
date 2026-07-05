@@ -91,7 +91,9 @@ async def test_fetch_all_job_cards_stops_after_a_partial_page(monkeypatch: pytes
 
     settings = _settings()
     async with httpx.AsyncClient() as client:
-        cards = await fetch_all_job_cards(client, [SearchQuery(keywords="Python", location="Ireland")], settings=settings)
+        cards = await fetch_all_job_cards(
+            client, [SearchQuery(keywords="Python", location="Ireland")], settings=settings, posted_within_hours=24
+        )
 
     assert len(cards) == 3
     assert call_count == 2  # never fetched the (nonexistent) page 2

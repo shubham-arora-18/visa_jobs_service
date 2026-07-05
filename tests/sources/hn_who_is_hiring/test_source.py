@@ -22,7 +22,6 @@ def _settings(**overrides: object) -> Settings:
         digest_recipients="me@example.com",
         brightdata_api_key="bd-key",
         brightdata_zone="zone",
-        job_posted_within_hours=24,
     )
     defaults.update(overrides)
     return Settings(**defaults)

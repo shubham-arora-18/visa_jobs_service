@@ -48,23 +48,26 @@ class HnWhoIsHiringSource:
 
     name = "hn_who_is_hiring"
 
-    def __init__(self, *, settings: Settings, http_client: httpx.AsyncClient) -> None:
+    def __init__(
+        self, *, settings: Settings, http_client: httpx.AsyncClient, posted_within_hours: int = 24
+    ) -> None:
         self._settings = settings
         self._http_client = http_client
         self._llm_client = build_client(hf_token=settings.hf_token)
+        self._posted_within_hours = posted_within_hours
 
     async def fetch_jobs(self) -> list[NormalizedJob]:
         item_id = await find_latest_who_is_hiring_item_id(self._http_client)
         item_payload = await fetch_item_json(self._http_client, item_id)
         job_post = parse_job_post(item_payload)
 
-        earliest_posted_at = datetime.now(tz=timezone.utc) - timedelta(hours=self._settings.job_posted_within_hours)
+        earliest_posted_at = datetime.now(tz=timezone.utc) - timedelta(hours=self._posted_within_hours)
         candidates = extract_candidates(job_post, earliest_posted_at=earliest_posted_at)
         logger.info(
             "%s: %d candidates posted in the last %dh",
             self.name,
             len(candidates),
-            self._settings.job_posted_within_hours,
+            self._posted_within_hours,
         )
 
         confirmed = await gather_limited(

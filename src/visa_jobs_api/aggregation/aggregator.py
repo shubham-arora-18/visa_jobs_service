@@ -17,6 +17,7 @@ from visa_jobs_api.config import Settings
 from visa_jobs_api.shared.models import NormalizedJob
 from visa_jobs_api.sources import JobSource
 from visa_jobs_api.sources.hn_who_is_hiring.source import HnWhoIsHiringSource
+from visa_jobs_api.sources.linkedin.queries import DEFAULT_KEYWORDS
 from visa_jobs_api.sources.linkedin.source import LinkedInSource
 
 logger = logging.getLogger(__name__)
@@ -28,10 +29,21 @@ class DigestBuildError(RuntimeError):
     """Raised when a source fails to produce its job listings."""
 
 
-def build_sources(*, settings: Settings, http_client: httpx.AsyncClient) -> list[JobSource]:
+def build_sources(
+    *,
+    settings: Settings,
+    http_client: httpx.AsyncClient,
+    linkedin_keywords: str = DEFAULT_KEYWORDS,
+    posted_within_hours: int = 24,
+) -> list[JobSource]:
     return [
-        HnWhoIsHiringSource(settings=settings, http_client=http_client),
-        LinkedInSource(settings=settings, http_client=http_client),
+        HnWhoIsHiringSource(settings=settings, http_client=http_client, posted_within_hours=posted_within_hours),
+        LinkedInSource(
+            settings=settings,
+            http_client=http_client,
+            keywords=linkedin_keywords,
+            posted_within_hours=posted_within_hours,
+        ),
     ]
 
 

@@ -1,8 +1,32 @@
-"""Response DTOs for the digest API."""
+"""Request/response DTOs for the digest API."""
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict
+
+from visa_jobs_api.sources.linkedin.queries import DEFAULT_KEYWORDS
+
+PostedWithinWindow = Literal["day", "week", "month"]
+
+_HOURS_BY_WINDOW: dict[PostedWithinWindow, int] = {
+    "day": 24,
+    "week": 24 * 7,
+    "month": 24 * 30,
+}
+
+
+class DigestRunRequest(BaseModel):
+    """Optional per-run overrides. Omit the body entirely to use all defaults."""
+
+    model_config = ConfigDict(frozen=True)
+
+    linkedin_keywords: str = DEFAULT_KEYWORDS
+    posted_within: PostedWithinWindow = "day"
+
+    def posted_within_hours(self) -> int:
+        return _HOURS_BY_WINDOW[self.posted_within]
 
 
 class SourceCount(BaseModel):

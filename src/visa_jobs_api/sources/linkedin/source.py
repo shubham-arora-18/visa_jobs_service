@@ -15,7 +15,7 @@ from visa_jobs_api.shared.visa_llm import build_client, confirm_visa_offer
 from visa_jobs_api.sources.linkedin.description import fetch_all_descriptions
 from visa_jobs_api.sources.linkedin.extract import country_from_location, dedupe_cards, filter_by_title
 from visa_jobs_api.sources.linkedin.models import LinkedInJobCandidate
-from visa_jobs_api.sources.linkedin.queries import SEARCH_QUERIES
+from visa_jobs_api.sources.linkedin.queries import DEFAULT_KEYWORDS, build_search_queries
 from visa_jobs_api.sources.linkedin.search import fetch_all_job_cards
 
 logger = logging.getLogger(__name__)
@@ -42,19 +42,29 @@ class LinkedInSource:
 
     name = "linkedin"
 
-    def __init__(self, *, settings: Settings, http_client: httpx.AsyncClient) -> None:
+    def __init__(
+        self,
+        *,
+        settings: Settings,
+        http_client: httpx.AsyncClient,
+        keywords: str = DEFAULT_KEYWORDS,
+        posted_within_hours: int = 24,
+    ) -> None:
         self._settings = settings
         self._http_client = http_client
         self._llm_client = build_client(hf_token=settings.hf_token)
+        self._keywords = keywords
+        self._posted_within_hours = posted_within_hours
 
     async def fetch_jobs(self) -> list[NormalizedJob]:
-        cards = await fetch_all_job_cards(self._http_client, SEARCH_QUERIES, settings=self._settings)
+        queries = build_search_queries(self._keywords)
+        cards = await fetch_all_job_cards(
+            self._http_client, queries, settings=self._settings, posted_within_hours=self._posted_within_hours
+        )
         logger.info("%s: %d job cards scraped", self.name, len(cards))
 
         cards = filter_by_title(dedupe_cards(cards))
-        earliest_posted_on = (
-            datetime.now(tz=timezone.utc) - timedelta(hours=self._settings.job_posted_within_hours)
-        ).date()
+        earliest_posted_on = (datetime.now(tz=timezone.utc) - timedelta(hours=self._posted_within_hours)).date()
         cards = [card for card in cards if card.posted_on >= earliest_posted_on]
         logger.info("%s: %d cards after dedup/title-filter/recency-window", self.name, len(cards))
 

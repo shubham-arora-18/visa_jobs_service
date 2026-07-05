@@ -161,10 +161,37 @@ evidence.
   the run happens" rather than a true rolling 24 hours. This is an inherent
   data-quality limit of the source, not a bug -- flagging it here rather
   than presenting false precision.
-- The window is configurable via `JOB_POSTED_WITHIN_HOURS` (default 24) and
-  also narrows LinkedIn's own search-time filter (`f_TPR=r{seconds}`), so a
-  smaller window also means fewer wasted Bright Data requests, not just a
-  stricter post-hoc filter.
+- The window also narrows LinkedIn's own search-time filter
+  (`f_TPR=r{seconds}`), so a smaller window also means fewer wasted Bright
+  Data requests, not just a stricter post-hoc filter.
+
+## Recency window and LinkedIn keywords are per-request API inputs, not env vars
+
+Originally `JOB_POSTED_WITHIN_HOURS` was an env var (default 24) and
+LinkedIn's keyword expression was a private module constant in
+`sources/linkedin/queries.py`. Both are now optional fields on the
+`POST /digest/run` request body instead (`api/dto/digest.DigestRunRequest`),
+so a caller can vary them per run without touching config or redeploying:
+
+- `linkedin_keywords: str` -- defaults to
+  `DEFAULT_KEYWORDS` (still `"(Python OR Backend OR Java) AND (sponsor OR
+  sponsorship)"`, now exported from `sources/linkedin/queries.py` rather
+  than private). Applied to every country in the fixed country list
+  (`queries._COUNTRIES`, still a code constant -- only the keyword
+  expression is a runtime input, not the country list itself).
+- `posted_within: "day" | "week" | "month"` -- defaults to `"day"` (24h,
+  preserving the existing behavior). Resolved to an hour count
+  (`DigestRunRequest.posted_within_hours()`: 24/168/720) and threaded
+  explicitly through `run_digest -> build_sources -> {HnWhoIsHiringSource,
+  LinkedInSource}` as a constructor parameter -- **not** read from
+  `Settings`, since `Settings` is a cached, process-wide singleton
+  (`get_settings()` via `lru_cache`) and mutating it per-request would be a
+  race condition under concurrent requests. `JOB_POSTED_WITHIN_HOURS` was
+  removed from `Settings`/`.env` entirely now that it's fully
+  request-driven.
+
+Both fields are optional -- `POST /digest/run` with an empty/no body still
+works exactly as before (default keywords, 24h window).
 
 ## Per-stage concurrency (rate-limit protection)
 
@@ -211,8 +238,9 @@ to 24 concurrent in that earlier testing).
 ## Email headline
 
 Changed to **"N Visa-Sponsoring Jobs Posted in the Last {H} Hours"** (using
-the actual configured `JOB_POSTED_WITHIN_HOURS`, so it stays accurate if
-that's ever changed) per your explicit request, replacing job_digest's
+the actual resolved `posted_within_hours` for that run, so it stays
+accurate whether the request used the default day window or an overridden
+week/month one) per your explicit request, replacing job_digest's
 original "N Visa-Sponsoring Jobs -- {Month Year}" headline (which no longer
 makes sense once the digest is a 24-hour window rather than a monthly one).
 
@@ -244,10 +272,12 @@ rather than having this service replace or wrap job_digest's scheduled run.
 - API layer: router (200/502 paths) and service layer (success email +
   summary vs. failure email + re-raise) with the aggregator/emailer mocked
   out.
-- All 77 tests pass locally (`pytest`) -- 70 from the initial build plus 7
-  added for the tech-stack/role-group fallback behavior (regex-wins-when-present
-  for HN, LLM-always for LinkedIn, strict role_group validation, and the
-  digest HTML actually showing them).
+- All 85 tests pass locally (`pytest`) -- 70 from the initial build, 7 for
+  the tech-stack/role-group fallback behavior (regex-wins-when-present for
+  HN, LLM-always for LinkedIn, strict role_group validation, and the digest
+  HTML actually showing them), and 8 more for the `linkedin_keywords` /
+  `posted_within` request inputs (DTO resolution, router pass-through,
+  `build_search_queries`).
 
 ## Verified end-to-end locally
 

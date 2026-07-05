@@ -1,8 +1,9 @@
 # visa-jobs-api
 
 FastAPI service that aggregates visa-sponsoring software engineering job
-listings from Hacker News ("Who is hiring?") and LinkedIn, posted in the
-last 24 hours, into one emailed digest grouped by country.
+listings from Hacker News ("Who is hiring?") and LinkedIn into one emailed
+digest, grouped by country. Defaults to the last 24 hours; configurable
+per-request (see below).
 
 See `ARCHITECTURE.md` for a diagram of how it fits together, and
 `DECISIONS.md` for the reasoning behind the non-obvious choices made while
@@ -28,14 +29,19 @@ see `DECISIONS.md`).
 .venv/bin/uvicorn visa_jobs_api.main:app --reload
 ```
 
-Then trigger a run:
+Then trigger a run (body is optional -- omit it entirely for the defaults
+shown below):
 
 ```bash
-curl -X POST http://127.0.0.1:8000/digest/run
+curl -X POST http://127.0.0.1:8000/digest/run \
+  -H "Content-Type: application/json" \
+  -d '{"linkedin_keywords": "(Python OR Backend OR Java) AND (sponsor OR sponsorship)", "posted_within": "day"}'
 ```
 
-This runs both sources concurrently, emails the combined digest to
-`DIGEST_RECIPIENTS`, and returns a JSON summary of what was found.
+`posted_within` accepts `"day"` (24h, default), `"week"` (168h), or
+`"month"` (720h). This runs both sources concurrently, emails the combined
+digest to `DIGEST_RECIPIENTS`, and returns a JSON summary of what was
+found.
 
 ## Test
 

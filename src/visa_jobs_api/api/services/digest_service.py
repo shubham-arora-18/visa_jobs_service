@@ -23,11 +23,14 @@ from visa_jobs_api.api.dto.digest import DigestRunResponse, SourceCount
 from visa_jobs_api.config import Settings
 from visa_jobs_api.emailer import send_failure_email, send_success_email
 from visa_jobs_api.shared.models import NormalizedJob
+from visa_jobs_api.sources.linkedin.queries import DEFAULT_KEYWORDS
 
 logger = logging.getLogger(__name__)
 
 
-async def run_digest(*, settings: Settings) -> DigestRunResponse:
+async def run_digest(
+    *, settings: Settings, linkedin_keywords: str = DEFAULT_KEYWORDS, posted_within_hours: int = 24
+) -> DigestRunResponse:
     """Run both sources in parallel, aggregate+group+sort, email the digest, and summarize the run.
 
     Any failure anywhere in the pipeline is reported via a failure email
@@ -38,12 +41,17 @@ async def run_digest(*, settings: Settings) -> DigestRunResponse:
     """
     try:
         async with httpx.AsyncClient() as http_client:
-            sources = build_sources(settings=settings, http_client=http_client)
+            sources = build_sources(
+                settings=settings,
+                http_client=http_client,
+                linkedin_keywords=linkedin_keywords,
+                posted_within_hours=posted_within_hours,
+            )
             jobs = await collect_jobs(sources)
 
         grouped = group_and_sort_by_country(jobs)
-        subject = digest_headline(len(jobs), posted_within_hours=settings.job_posted_within_hours)
-        html_body = render_digest_html(grouped, posted_within_hours=settings.job_posted_within_hours)
+        subject = digest_headline(len(jobs), posted_within_hours=posted_within_hours)
+        html_body = render_digest_html(grouped, posted_within_hours=posted_within_hours)
 
         await send_success_email(settings=settings, subject=subject, html_body=html_body)
         logger.info("Digest sent successfully: %s", subject)

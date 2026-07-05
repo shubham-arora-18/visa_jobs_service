@@ -75,9 +75,11 @@ def _parse_one_card(info_div: Tag) -> JobCard | None:
     )
 
 
-async def _fetch_query_job_cards(client: httpx.AsyncClient, query: SearchQuery, *, settings: Settings) -> list[JobCard]:
+async def _fetch_query_job_cards(
+    client: httpx.AsyncClient, query: SearchQuery, *, settings: Settings, posted_within_hours: int
+) -> list[JobCard]:
     page_size = settings.linkedin_posts_per_page
-    timespan_seconds = settings.job_posted_within_hours * 3600
+    timespan_seconds = posted_within_hours * 3600
     cards: list[JobCard] = []
     for page in range(settings.linkedin_max_pages_per_query):
         url = _build_search_url(query, start=page_size * page, timespan_seconds=timespan_seconds)
@@ -97,12 +99,12 @@ async def _fetch_query_job_cards(client: httpx.AsyncClient, query: SearchQuery, 
 
 
 async def fetch_all_job_cards(
-    client: httpx.AsyncClient, queries: list[SearchQuery], *, settings: Settings
+    client: httpx.AsyncClient, queries: list[SearchQuery], *, settings: Settings, posted_within_hours: int
 ) -> list[JobCard]:
     """Fetch every query's job cards, at most `linkedin_search_concurrency` queries at a time."""
     results = await gather_limited(
         queries,
-        lambda query: _fetch_query_job_cards(client, query, settings=settings),
+        lambda query: _fetch_query_job_cards(client, query, settings=settings, posted_within_hours=posted_within_hours),
         limit=settings.linkedin_search_concurrency,
     )
     return [card for query_cards in results for card in query_cards]

@@ -20,7 +20,6 @@ def _settings(**overrides: object) -> Settings:
         digest_recipients="me@example.com",
         brightdata_api_key="bd-key",
         brightdata_zone="zone",
-        job_posted_within_hours=24,
         linkedin_llm_concurrency=5,
     )
     defaults.update(overrides)
@@ -160,7 +159,7 @@ async def test_fetch_jobs_excludes_cards_outside_the_recency_window(monkeypatch:
     monkeypatch.setattr("visa_jobs_api.sources.linkedin.source.build_client", lambda hf_token: MagicMock())
 
     async with httpx.AsyncClient() as http_client:
-        source = LinkedInSource(settings=_settings(job_posted_within_hours=24), http_client=http_client)
+        source = LinkedInSource(settings=_settings(), http_client=http_client, posted_within_hours=24)
         jobs = await source.fetch_jobs()
 
     assert jobs == []
