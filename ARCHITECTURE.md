@@ -41,7 +41,7 @@ flowchart TB
         LLM["visa_llm.py<br/>confirm_visa_offer()<br/>+ country inference"]
         Models["models.py<br/>NormalizedJob"]
         Concurrency["concurrency.py<br/>gather_limited() -- per-stage<br/>asyncio.Semaphore caps"]
-        Http["http.py<br/>fetch_html() direct or<br/>via Bright Data Web Unlocker"]
+        Http["http.py<br/>fetch_html() direct or<br/>via Decodo Scraper API"]
     end
 
     Config["config.py<br/>Settings (.env)<br/>secrets + per-stage concurrency"]

@@ -19,6 +19,7 @@ from visa_jobs_api.sources.linkedin.models import SearchQuery
 DEFAULT_KEYWORDS = "(Python OR Backend OR Java) AND (sponsor OR sponsorship)"
 
 _COUNTRIES = [
+    "United States",
     "Canada",
     "United Kingdom",
     "Germany",
@@ -28,6 +29,10 @@ _COUNTRIES = [
     "Australia",
     "Singapore",
     "United Arab Emirates",
+    "New Zealand",
+    "Sweden",
+    "France",
+    "Japan",
 ]
 
 

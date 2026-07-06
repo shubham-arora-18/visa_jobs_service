@@ -16,8 +16,8 @@ def _settings(**overrides: object) -> Settings:
         gmail_address="a@b.com",
         gmail_app_password="pw",
         digest_recipients="me@example.com,you@example.com",
-        brightdata_api_key="bd-key",
-        brightdata_zone="zone",
+        decodo_username="decodo-user",
+        decodo_password="decodo-pass",
     )
     defaults.update(overrides)
     return Settings(**defaults)

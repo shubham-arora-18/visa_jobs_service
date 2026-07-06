@@ -19,9 +19,9 @@ cp .env.example .env  # fill in real values
 
 Required `.env` values: `HF_TOKEN` (Hugging Face Inference Providers),
 `GMAIL_ADDRESS`/`GMAIL_APP_PASSWORD`/`DIGEST_RECIPIENTS` (email delivery),
-`BRIGHTDATA_API_KEY`/`BRIGHTDATA_ZONE` (LinkedIn scraping via Bright Data's
-Web Unlocker -- LinkedIn blocks direct scraping at any real concurrency,
-see `DECISIONS.md`).
+`DECODO_USERNAME`/`DECODO_PASSWORD` (LinkedIn scraping via Decodo's Scraper
+API -- LinkedIn blocks direct scraping at any real concurrency, see
+`DECISIONS.md`).
 
 ## Run
 
@@ -50,8 +50,8 @@ day at 09:00 IST via the `visa-jobs-digest` CLI entry point (same
 `run_digest` logic as the API, defaulting to a 1-day window -- no HTTP
 server needed for the scheduled run). Requires these set as repo
 secrets/variables: `HF_TOKEN`, `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`,
-`BRIGHTDATA_API_KEY` (secrets), `DIGEST_RECIPIENTS`, `BRIGHTDATA_ZONE`
-(variables). Trigger it manually via the Actions tab
+`DECODO_USERNAME`, `DECODO_PASSWORD` (secrets), `DIGEST_RECIPIENTS`
+(variable). Trigger it manually via the Actions tab
 ("workflow_dispatch") or run the same command locally:
 
 ```bash

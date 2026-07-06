@@ -3,7 +3,7 @@
 Each stage (LinkedIn search pages, LinkedIn description fetches, either
 source's LLM confirmation calls) needs its own independently-tunable cap on
 how many tasks run at once, to stay under whatever rate the upstream
-service (LinkedIn/Bright Data, Hugging Face) tolerates -- see
+service (LinkedIn/Decodo, Hugging Face) tolerates -- see
 Settings.*_concurrency. This is the one place that implements "run these,
 but at most N at a time."
 """

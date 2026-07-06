@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from visa_jobs_api.config import Settings
+from visa_jobs_api.sources.linkedin.call_stats import CallStats
 from visa_jobs_api.sources.linkedin.description import _extract_description_text, fetch_all_descriptions
 from visa_jobs_api.sources.linkedin.models import JobCard
 
@@ -16,16 +17,23 @@ def _settings(**overrides: object) -> Settings:
         gmail_address="a@b.com",
         gmail_app_password="pw",
         digest_recipients="me@example.com",
-        brightdata_api_key="bd-key",
-        brightdata_zone="zone",
+        decodo_username="decodo-user",
+        decodo_password="decodo-pass",
         linkedin_description_concurrency=5,
     )
     defaults.update(overrides)
     return Settings(**defaults)
 
 
-def _card(url: str = "https://www.linkedin.com/jobs/view/1/") -> JobCard:
-    return JobCard(title="Software Engineer", company="Acme", location="Dublin, Ireland", posted_on=date(2026, 7, 4), url=url)
+def _card(url: str = "https://www.linkedin.com/jobs/view/1/", query_country: str = "Ireland") -> JobCard:
+    return JobCard(
+        title="Software Engineer",
+        company="Acme",
+        location="Dublin, Ireland",
+        posted_on=date(2026, 7, 4),
+        url=url,
+        query_country=query_country,
+    )
 
 
 def test_extract_description_text_returns_none_when_block_missing() -> None:
@@ -61,3 +69,21 @@ async def test_fetch_all_descriptions_skips_pages_with_no_description_block(monk
     assert len(candidates) == 1
     assert candidates[0].card.url == "https://www.linkedin.com/jobs/view/1/"
     assert candidates[0].language == "en"
+
+
+async def test_fetch_all_descriptions_records_one_call_per_card_by_query_country(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_fetch_html(client, url, **kwargs):
+        return '<div class="description__text description__text--rich">We offer visa sponsorship.</div>'
+
+    monkeypatch.setattr("visa_jobs_api.sources.linkedin.description.fetch_html", fake_fetch_html)
+
+    cards = [
+        _card("https://www.linkedin.com/jobs/view/1/", query_country="Ireland"),
+        _card("https://www.linkedin.com/jobs/view/2/", query_country="Ireland"),
+        _card("https://www.linkedin.com/jobs/view/3/", query_country="Germany"),
+    ]
+    stats = CallStats()
+    async with httpx.AsyncClient() as client:
+        await fetch_all_descriptions(client, cards, settings=_settings(), stats=stats)
+
+    assert stats.description_calls == {"Ireland": 2, "Germany": 1}

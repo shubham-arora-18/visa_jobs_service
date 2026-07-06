@@ -24,6 +24,7 @@ from langdetect.lang_detect_exception import LangDetectException
 from visa_jobs_api.config import Settings
 from visa_jobs_api.shared.concurrency import gather_limited
 from visa_jobs_api.shared.http import fetch_html
+from visa_jobs_api.sources.linkedin.call_stats import CallStats
 from visa_jobs_api.sources.linkedin.models import JobCard, LinkedInJobCandidate
 
 logger = logging.getLogger(__name__)
@@ -56,15 +57,16 @@ def _detect_language(text: str) -> str:
 
 
 async def _fetch_one_description(
-    client: httpx.AsyncClient, card: JobCard, *, settings: Settings
+    client: httpx.AsyncClient, card: JobCard, *, settings: Settings, stats: CallStats
 ) -> LinkedInJobCandidate | None:
     html = await fetch_html(
         client,
         card.url,
-        via_brightdata=True,
-        brightdata_api_key=settings.brightdata_api_key,
-        brightdata_zone=settings.brightdata_zone,
+        via_decodo=True,
+        decodo_username=settings.decodo_username,
+        decodo_password=settings.decodo_password,
     )
+    stats.record_description_call(card.query_country)
     description = _extract_description_text(html)
     if description is None:
         logger.warning("No description block found for %s -- skipping", card.url)
@@ -73,12 +75,13 @@ async def _fetch_one_description(
 
 
 async def fetch_all_descriptions(
-    client: httpx.AsyncClient, cards: list[JobCard], *, settings: Settings
+    client: httpx.AsyncClient, cards: list[JobCard], *, settings: Settings, stats: CallStats | None = None
 ) -> list[LinkedInJobCandidate]:
     """Fetch every card's full description, at most `linkedin_description_concurrency` at a time."""
+    stats = stats if stats is not None else CallStats()
     results = await gather_limited(
         cards,
-        lambda card: _fetch_one_description(client, card, settings=settings),
+        lambda card: _fetch_one_description(client, card, settings=settings, stats=stats),
         limit=settings.linkedin_description_concurrency,
     )
     return [candidate for candidate in results if candidate is not None]

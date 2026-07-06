@@ -18,8 +18,8 @@ def _settings(**overrides: object) -> Settings:
         gmail_address="a@b.com",
         gmail_app_password="pw",
         digest_recipients="me@example.com",
-        brightdata_api_key="bd-key",
-        brightdata_zone="zone",
+        decodo_username="decodo-user",
+        decodo_password="decodo-pass",
         linkedin_llm_concurrency=5,
     )
     defaults.update(overrides)
@@ -28,7 +28,12 @@ def _settings(**overrides: object) -> Settings:
 
 def _card(**overrides: object) -> JobCard:
     defaults: dict[str, object] = dict(
-        title="Software Engineer", company="Acme", location="Dublin, Ireland", posted_on=date.today(), url="https://x/1"
+        title="Software Engineer",
+        company="Acme",
+        location="Dublin, Ireland",
+        posted_on=date.today(),
+        url="https://x/1",
+        query_country="Ireland",
     )
     defaults.update(overrides)
     return JobCard(**defaults)
@@ -72,8 +77,8 @@ async def test_fetch_jobs_uses_the_llms_tech_stack_and_role_group(monkeypatch: p
     assert jobs[0].role_group == "Frontend"
 
 
-async def test_fetch_jobs_confirms_english_candidate_and_uses_structured_country(monkeypatch: pytest.MonkeyPatch) -> None:
-    card = _card(location="Dublin, Ireland")
+async def test_fetch_jobs_confirms_english_candidate_and_uses_query_country(monkeypatch: pytest.MonkeyPatch) -> None:
+    card = _card(location="Dublin, Ireland", query_country="Ireland")
     candidate = LinkedInJobCandidate(card=card, description="We offer visa sponsorship.", language="en")
 
     monkeypatch.setattr("visa_jobs_api.sources.linkedin.source.fetch_all_job_cards", AsyncMock(return_value=[card]))
@@ -87,15 +92,23 @@ async def test_fetch_jobs_confirms_english_candidate_and_uses_structured_country
         source = LinkedInSource(settings=_settings(), http_client=http_client)
         jobs = await source.fetch_jobs()
 
-    # Structured location ("Ireland") wins over the LLM's guessed country
-    # ("France") -- it's deterministic and more trustworthy than a guess.
+    # The card's query country ("Ireland" -- the SearchQuery that produced
+    # it) wins over the LLM's guessed country ("France"): it's deterministic
+    # and known exactly, unlike a guess.
     assert len(jobs) == 1
     assert jobs[0].country == "Ireland"
     assert jobs[0].source == "linkedin"
 
 
-async def test_fetch_jobs_falls_back_to_llm_country_when_location_is_remote(monkeypatch: pytest.MonkeyPatch) -> None:
-    card = _card(location="Remote")
+async def test_fetch_jobs_uses_query_country_even_when_card_location_is_remote_or_a_us_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Real bug: LinkedIn's own location text is unreliable as a country
+    # source -- "Remote", "San Francisco, CA" (a US state abbreviation, not
+    # a country), and comma-less metro names ("Greater Pittsburgh Region")
+    # all break a from-text guess. The query country is known exactly
+    # regardless of what the location text says.
+    card = _card(location="San Francisco, CA", query_country="United States")
     candidate = LinkedInJobCandidate(card=card, description="We offer visa sponsorship.", language="en")
 
     monkeypatch.setattr("visa_jobs_api.sources.linkedin.source.fetch_all_job_cards", AsyncMock(return_value=[card]))
@@ -109,7 +122,30 @@ async def test_fetch_jobs_falls_back_to_llm_country_when_location_is_remote(monk
         source = LinkedInSource(settings=_settings(), http_client=http_client)
         jobs = await source.fetch_jobs()
 
-    assert jobs[0].country == "Germany"
+    assert jobs[0].country == "United States"
+
+
+async def test_fetch_jobs_records_one_llm_call_per_candidate_by_query_country(monkeypatch: pytest.MonkeyPatch) -> None:
+    ie_card = _card(query_country="Ireland")
+    de_card = _card(url="https://x/2", query_country="Germany")
+    ie_candidate = LinkedInJobCandidate(card=ie_card, description="We offer visa sponsorship.", language="en")
+    de_candidate = LinkedInJobCandidate(card=de_card, description="We offer visa sponsorship.", language="en")
+
+    monkeypatch.setattr(
+        "visa_jobs_api.sources.linkedin.source.fetch_all_job_cards", AsyncMock(return_value=[ie_card, de_card])
+    )
+    monkeypatch.setattr(
+        "visa_jobs_api.sources.linkedin.source.fetch_all_descriptions",
+        AsyncMock(return_value=[ie_candidate, de_candidate]),
+    )
+    llm_client = _make_llm_client('{"offers_sponsorship": true, "reason": "explicit offer"}')
+    monkeypatch.setattr("visa_jobs_api.sources.linkedin.source.build_client", lambda hf_token: llm_client)
+
+    async with httpx.AsyncClient() as http_client:
+        source = LinkedInSource(settings=_settings(), http_client=http_client)
+        await source.fetch_jobs()
+
+    assert source._call_stats.llm_calls == {"Ireland": 1, "Germany": 1}
 
 
 async def test_fetch_jobs_skips_llm_when_no_regex_mention_found(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -165,4 +201,4 @@ async def test_fetch_jobs_excludes_cards_outside_the_recency_window(monkeypatch:
     assert jobs == []
     # The old card must be filtered out before we ever spend a description
     # fetch on it.
-    fetch_descriptions_mock.assert_called_once_with(http_client, [], settings=source._settings)
+    fetch_descriptions_mock.assert_called_once_with(http_client, [], settings=source._settings, stats=source._call_stats)

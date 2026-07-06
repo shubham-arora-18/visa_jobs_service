@@ -12,8 +12,9 @@ from visa_jobs_api.shared.concurrency import gather_limited
 from visa_jobs_api.shared.models import NormalizedJob
 from visa_jobs_api.shared.visa_keywords import find_visa_mentions
 from visa_jobs_api.shared.visa_llm import build_client, confirm_visa_offer
+from visa_jobs_api.sources.linkedin.call_stats import CallStats
 from visa_jobs_api.sources.linkedin.description import fetch_all_descriptions
-from visa_jobs_api.sources.linkedin.extract import country_from_location, dedupe_cards, filter_by_title
+from visa_jobs_api.sources.linkedin.extract import dedupe_cards, filter_by_title
 from visa_jobs_api.sources.linkedin.models import LinkedInJobCandidate
 from visa_jobs_api.sources.linkedin.queries import DEFAULT_KEYWORDS, build_search_queries
 from visa_jobs_api.sources.linkedin.search import fetch_all_job_cards
@@ -55,11 +56,16 @@ class LinkedInSource:
         self._llm_client = build_client(hf_token=settings.hf_token)
         self._keywords = keywords
         self._posted_within_hours = posted_within_hours
+        self._call_stats = CallStats()
 
     async def fetch_jobs(self) -> list[NormalizedJob]:
         queries = build_search_queries(self._keywords)
         cards = await fetch_all_job_cards(
-            self._http_client, queries, settings=self._settings, posted_within_hours=self._posted_within_hours
+            self._http_client,
+            queries,
+            settings=self._settings,
+            posted_within_hours=self._posted_within_hours,
+            stats=self._call_stats,
         )
         logger.info("%s: %d job cards scraped", self.name, len(cards))
 
@@ -68,7 +74,9 @@ class LinkedInSource:
         cards = [card for card in cards if card.posted_on >= earliest_posted_on]
         logger.info("%s: %d cards after dedup/title-filter/recency-window", self.name, len(cards))
 
-        candidates = await fetch_all_descriptions(self._http_client, cards, settings=self._settings)
+        candidates = await fetch_all_descriptions(
+            self._http_client, cards, settings=self._settings, stats=self._call_stats
+        )
         confirmed = await gather_limited(
             candidates,
             self._confirm_candidate,
@@ -78,6 +86,7 @@ class LinkedInSource:
         logger.info(
             "%s: %d of %d candidates confirmed as genuine sponsorship offers", self.name, len(jobs), len(candidates)
         )
+        self._call_stats.log_summary(logger)
         return jobs
 
     async def _confirm_candidate(self, candidate: LinkedInJobCandidate) -> NormalizedJob | None:
@@ -92,6 +101,7 @@ class LinkedInSource:
         else:
             mentions = []
 
+        self._call_stats.record_llm_call(candidate.card.query_country)
         verdict = await confirm_visa_offer(
             client=self._llm_client,
             system_prompt=_SYSTEM_PROMPT,
@@ -102,10 +112,13 @@ class LinkedInSource:
         if not verdict.offers_sponsorship:
             return None
 
-        # LinkedIn's own structured location is reliable enough to derive
-        # country deterministically; the LLM's guess is only a fallback for
-        # when that's missing or unresolvable (e.g. "Remote").
-        country = country_from_location(candidate.card.location) or verdict.country
+        # The country a card came from is already known exactly -- it's
+        # whichever SearchQuery.location produced it (see queries.py) --
+        # rather than a guess parsed from LinkedIn's freeform location text,
+        # which varies by country and breaks for US state abbreviations
+        # ("San Francisco, CA") and comma-less metro names ("Greater
+        # Pittsburgh Region") alike.
+        country = candidate.card.query_country
         # There's no regex-based tech detector for LinkedIn descriptions
         # (unlike HN), so the LLM's reading of the text is the only source
         # for tech_stack here.

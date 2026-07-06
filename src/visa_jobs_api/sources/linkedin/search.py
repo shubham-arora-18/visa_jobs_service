@@ -26,6 +26,7 @@ from bs4 import BeautifulSoup, Tag
 from visa_jobs_api.config import Settings
 from visa_jobs_api.shared.concurrency import gather_limited
 from visa_jobs_api.shared.http import fetch_html
+from visa_jobs_api.sources.linkedin.call_stats import CallStats
 from visa_jobs_api.sources.linkedin.models import JobCard, SearchQuery
 
 logger = logging.getLogger(__name__)
@@ -42,17 +43,17 @@ def _build_search_url(query: SearchQuery, *, start: int, timespan_seconds: int) 
     )
 
 
-def _parse_job_cards(html: str) -> list[JobCard]:
+def _parse_job_cards(html: str, *, query_country: str) -> list[JobCard]:
     soup = BeautifulSoup(html, "html.parser")
     cards: list[JobCard] = []
     for info_div in soup.find_all("div", class_="base-search-card__info"):
-        card = _parse_one_card(info_div)
+        card = _parse_one_card(info_div, query_country=query_country)
         if card is not None:
             cards.append(card)
     return cards
 
 
-def _parse_one_card(info_div: Tag) -> JobCard | None:
+def _parse_one_card(info_div: Tag, *, query_country: str) -> JobCard | None:
     parent = info_div.parent
     entity_urn = parent.get("data-entity-urn") if parent else None
     if not entity_urn:
@@ -72,11 +73,12 @@ def _parse_one_card(info_div: Tag) -> JobCard | None:
         location=location_tag.get_text(strip=True) if location_tag else "",
         posted_on=date.fromisoformat(date_tag["datetime"]),
         url=f"https://www.linkedin.com/jobs/view/{job_id}/",
+        query_country=query_country,
     )
 
 
 async def _fetch_query_job_cards(
-    client: httpx.AsyncClient, query: SearchQuery, *, settings: Settings, posted_within_hours: int
+    client: httpx.AsyncClient, query: SearchQuery, *, settings: Settings, posted_within_hours: int, stats: CallStats
 ) -> list[JobCard]:
     page_size = settings.linkedin_posts_per_page
     timespan_seconds = posted_within_hours * 3600
@@ -86,11 +88,12 @@ async def _fetch_query_job_cards(
         html = await fetch_html(
             client,
             url,
-            via_brightdata=True,
-            brightdata_api_key=settings.brightdata_api_key,
-            brightdata_zone=settings.brightdata_zone,
+            via_decodo=True,
+            decodo_username=settings.decodo_username,
+            decodo_password=settings.decodo_password,
         )
-        page_cards = _parse_job_cards(html)
+        stats.record_search_call(query.location)
+        page_cards = _parse_job_cards(html, query_country=query.location)
         cards.extend(page_cards)
         if len(page_cards) < page_size:
             break
@@ -99,12 +102,20 @@ async def _fetch_query_job_cards(
 
 
 async def fetch_all_job_cards(
-    client: httpx.AsyncClient, queries: list[SearchQuery], *, settings: Settings, posted_within_hours: int
+    client: httpx.AsyncClient,
+    queries: list[SearchQuery],
+    *,
+    settings: Settings,
+    posted_within_hours: int,
+    stats: CallStats | None = None,
 ) -> list[JobCard]:
     """Fetch every query's job cards, at most `linkedin_search_concurrency` queries at a time."""
+    stats = stats if stats is not None else CallStats()
     results = await gather_limited(
         queries,
-        lambda query: _fetch_query_job_cards(client, query, settings=settings, posted_within_hours=posted_within_hours),
+        lambda query: _fetch_query_job_cards(
+            client, query, settings=settings, posted_within_hours=posted_within_hours, stats=stats
+        ),
         limit=settings.linkedin_search_concurrency,
     )
     return [card for query_cards in results for card in query_cards]

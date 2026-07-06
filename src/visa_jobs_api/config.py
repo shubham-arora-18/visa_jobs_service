@@ -25,8 +25,8 @@ class Settings(BaseSettings):
     gmail_app_password: str
     digest_recipients: str
 
-    brightdata_api_key: str
-    brightdata_zone: str
+    decodo_username: str
+    decodo_password: str
 
     # Per-stage concurrency caps.
     hn_llm_concurrency: int = Field(default=5, gt=0)

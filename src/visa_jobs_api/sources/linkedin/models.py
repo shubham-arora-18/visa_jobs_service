@@ -27,6 +27,7 @@ class JobCard(BaseModel):
     location: str
     posted_on: date
     url: str
+    query_country: str
 
 
 class LinkedInJobCandidate(BaseModel):

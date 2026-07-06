@@ -360,3 +360,38 @@ move it. Also wired up the six concurrency variables
 workflow's `env:` block -- they'd been added as repo variables but weren't
 actually being passed through to the job at all, so they were silently
 having no effect (falling back to config.py's hardcoded defaults).
+
+## Switched from Bright Data to Decodo for LinkedIn fetches
+
+Replaced Bright Data's Web Unlocker with Decodo's Scraper API
+(`https://scraper-api.decodo.com/v2/scrape`) as the anti-bot proxy for all
+LinkedIn fetches (`shared/http.py`, both call sites in
+`sources/linkedin/search.py` and `sources/linkedin/description.py`).
+`Settings.brightdata_api_key`/`brightdata_zone` became
+`decodo_username`/`decodo_password` (Decodo authenticates via HTTP Basic
+auth on the request itself, not a bearer token + zone name).
+
+Decodo's response shape differs from Bright Data's: it wraps the fetched
+page in `{"results": [{"content": ..., "status_code": ..., ...}]}` rather
+than returning the raw HTML body directly, and the *outer* HTTP response
+from Decodo can be 200 even when the *inner* `status_code` (LinkedIn's
+actual response) is an error -- `_get_via_decodo` re-raises that inner
+status as an `httpx.HTTPStatusError` so the existing retry/`FetchError`
+classification in `fetch_html` keeps working unchanged.
+
+Verified against the real, currently-used production queries before
+swapping any code: manually curled Decodo with the exact `build_search_queries()`
+keyword expression against three real countries (Canada/UK/Germany),
+confirmed HTTP 200 and that `_parse_job_cards` parsed real job cards from
+the response unmodified, then ran the actual `fetch_all_job_cards` and
+`fetch_all_descriptions` functions live end-to-end against production
+`.env` config before considering the swap done.
+
+**Requires a network that doesn't block `scraper-api.decodo.com` by
+SNI/hostname** -- testing from the Adobe corporate VPN got every request
+reset during the TLS handshake (confirmed via `openssl s_client`: the
+handshake succeeds with no SNI and fails the instant the real hostname is
+sent), while the same requests worked immediately off that network. This
+doesn't affect GitHub Actions (runs on GitHub-hosted runners, not this
+VPN) but is worth knowing if this ever needs debugging from this laptop
+again.
