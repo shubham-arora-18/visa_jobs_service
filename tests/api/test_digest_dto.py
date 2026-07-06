@@ -13,11 +13,18 @@ def test_default_request_uses_default_keywords_and_a_one_day_window() -> None:
     assert request.linkedin_keywords == DEFAULT_KEYWORDS
     assert request.posted_within == "day"
     assert request.posted_within_hours() == 24
+    assert request.posted_within_label() == "1 Day"
 
 
 def test_week_and_month_resolve_to_the_expected_hour_counts() -> None:
     assert DigestRunRequest(posted_within="week").posted_within_hours() == 24 * 7
     assert DigestRunRequest(posted_within="month").posted_within_hours() == 24 * 30
+
+
+def test_week_and_month_resolve_to_the_expected_display_labels() -> None:
+    # The email headline should say "1 Week"/"1 Month", not an hour count.
+    assert DigestRunRequest(posted_within="week").posted_within_label() == "1 Week"
+    assert DigestRunRequest(posted_within="month").posted_within_label() == "1 Month"
 
 
 def test_custom_keywords_are_kept_verbatim() -> None:

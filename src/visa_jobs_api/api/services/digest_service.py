@@ -29,7 +29,11 @@ logger = logging.getLogger(__name__)
 
 
 async def run_digest(
-    *, settings: Settings, linkedin_keywords: str = DEFAULT_KEYWORDS, posted_within_hours: int = 24
+    *,
+    settings: Settings,
+    linkedin_keywords: str = DEFAULT_KEYWORDS,
+    posted_within_hours: int = 24,
+    posted_within_label: str = "1 Day",
 ) -> DigestRunResponse:
     """Run both sources in parallel, aggregate+group+sort, email the digest, and summarize the run.
 
@@ -50,8 +54,8 @@ async def run_digest(
             jobs = await collect_jobs(sources)
 
         grouped = group_and_sort_by_country(jobs)
-        subject = digest_headline(len(jobs), posted_within_hours=posted_within_hours)
-        html_body = render_digest_html(grouped, posted_within_hours=posted_within_hours)
+        subject = digest_headline(len(jobs), posted_within_label=posted_within_label)
+        html_body = render_digest_html(grouped, posted_within_label=posted_within_label)
 
         await send_success_email(settings=settings, subject=subject, html_body=html_body)
         logger.info("Digest sent successfully: %s", subject)

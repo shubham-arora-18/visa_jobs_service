@@ -38,6 +38,7 @@ async def trigger_digest_run(
             settings=settings,
             linkedin_keywords=request.linkedin_keywords,
             posted_within_hours=request.posted_within_hours(),
+            posted_within_label=request.posted_within_label(),
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"digest run failed: {exc}") from exc

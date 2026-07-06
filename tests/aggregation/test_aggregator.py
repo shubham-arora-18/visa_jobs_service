@@ -93,17 +93,22 @@ def test_group_and_sort_by_country_buckets_missing_country_as_remote_unspecified
 
 
 def test_digest_headline_includes_count_and_window() -> None:
-    headline = digest_headline(5, posted_within_hours=24)
-    assert headline == "5 Visa-Sponsoring Jobs Posted in the Last 24 Hours"
+    headline = digest_headline(5, posted_within_label="1 Day")
+    assert headline == "5 Visa-Sponsoring Jobs Posted in the Last 1 Day"
+
+
+def test_digest_headline_shows_week_label_for_week_window() -> None:
+    headline = digest_headline(5, posted_within_label="1 Week")
+    assert headline == "5 Visa-Sponsoring Jobs Posted in the Last 1 Week"
 
 
 def test_render_digest_html_includes_headline_and_country_sections() -> None:
     jobs = [_job(country="Ireland", title="Backend Role")]
     grouped = group_and_sort_by_country(jobs)
 
-    html_body = render_digest_html(grouped, posted_within_hours=24)
+    html_body = render_digest_html(grouped, posted_within_label="1 Day")
 
-    assert digest_headline(1, posted_within_hours=24) in html_body
+    assert digest_headline(1, posted_within_label="1 Day") in html_body
     assert "Ireland" in html_body
     assert "Backend Role" in html_body
 
@@ -112,7 +117,7 @@ def test_render_digest_html_shows_tech_stack_and_role_group() -> None:
     jobs = [_job(tech_stack=["Python", "Django"], role_group="Backend")]
     grouped = group_and_sort_by_country(jobs)
 
-    html_body = render_digest_html(grouped, posted_within_hours=24)
+    html_body = render_digest_html(grouped, posted_within_label="1 Day")
 
     assert "Python, Django" in html_body
     assert "Backend" in html_body
@@ -122,12 +127,12 @@ def test_render_digest_html_shows_not_mentioned_only_when_tech_stack_truly_empty
     jobs = [_job(tech_stack=[])]
     grouped = group_and_sort_by_country(jobs)
 
-    html_body = render_digest_html(grouped, posted_within_hours=24)
+    html_body = render_digest_html(grouped, posted_within_label="1 Day")
 
     assert "Tech: not mentioned" in html_body
 
 
 def test_render_digest_html_shows_a_message_when_there_are_no_jobs() -> None:
-    html_body = render_digest_html([], posted_within_hours=24)
+    html_body = render_digest_html([], posted_within_label="1 Day")
 
     assert "No visa-sponsoring postings found" in html_body

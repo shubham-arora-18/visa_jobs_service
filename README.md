@@ -43,6 +43,21 @@ curl -X POST http://127.0.0.1:8000/digest/run \
 digest to `DIGEST_RECIPIENTS`, and returns a JSON summary of what was
 found.
 
+## Scheduled daily run
+
+`.github/workflows/daily-digest.yml` runs the digest automatically every
+day at 09:00 IST via the `visa-jobs-digest` CLI entry point (same
+`run_digest` logic as the API, defaulting to a 1-day window -- no HTTP
+server needed for the scheduled run). Requires these set as repo
+secrets/variables: `HF_TOKEN`, `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`,
+`BRIGHTDATA_API_KEY` (secrets), `DIGEST_RECIPIENTS`, `BRIGHTDATA_ZONE`
+(variables). Trigger it manually via the Actions tab
+("workflow_dispatch") or run the same command locally:
+
+```bash
+.venv/bin/visa-jobs-digest
+```
+
 ## Test
 
 ```bash

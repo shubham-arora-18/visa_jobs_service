@@ -25,6 +25,9 @@ test = [
     "respx>=0.21",
 ]
 
+[project.scripts]
+visa-jobs-digest = "visa_jobs_api.cli:main"
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"

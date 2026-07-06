@@ -16,6 +16,12 @@ _HOURS_BY_WINDOW: dict[PostedWithinWindow, int] = {
     "month": 24 * 30,
 }
 
+_LABEL_BY_WINDOW: dict[PostedWithinWindow, str] = {
+    "day": "1 Day",
+    "week": "1 Week",
+    "month": "1 Month",
+}
+
 
 class DigestRunRequest(BaseModel):
     """Optional per-run overrides. Omit the body entirely to use all defaults."""
@@ -27,6 +33,9 @@ class DigestRunRequest(BaseModel):
 
     def posted_within_hours(self) -> int:
         return _HOURS_BY_WINDOW[self.posted_within]
+
+    def posted_within_label(self) -> str:
+        return _LABEL_BY_WINDOW[self.posted_within]
 
 
 class SourceCount(BaseModel):

@@ -1,0 +1,31 @@
+name: Daily visa jobs digest
+
+on:
+  schedule:
+    # 03:30 UTC = 09:00 IST (UTC+5:30). GitHub Actions cron is always UTC --
+    # adjust this if the target timezone isn't IST.
+    - cron: "30 3 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  send-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -e .
+
+      - name: Run digest
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          DIGEST_RECIPIENTS: ${{ vars.DIGEST_RECIPIENTS }}
+          BRIGHTDATA_API_KEY: ${{ secrets.BRIGHTDATA_API_KEY }}
+          BRIGHTDATA_ZONE: ${{ vars.BRIGHTDATA_ZONE }}
+        run: visa-jobs-digest

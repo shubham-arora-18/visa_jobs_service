@@ -60,6 +60,7 @@ def test_trigger_digest_run_defaults_to_default_keywords_and_a_day_window(
 
     assert run_digest_mock.call_args.kwargs["linkedin_keywords"] == DEFAULT_KEYWORDS
     assert run_digest_mock.call_args.kwargs["posted_within_hours"] == 24
+    assert run_digest_mock.call_args.kwargs["posted_within_label"] == "1 Day"
 
 
 def test_trigger_digest_run_passes_through_custom_keywords_and_window(
@@ -73,3 +74,4 @@ def test_trigger_digest_run_passes_through_custom_keywords_and_window(
 
     assert run_digest_mock.call_args.kwargs["linkedin_keywords"] == "(Rust OR Go) AND sponsor"
     assert run_digest_mock.call_args.kwargs["posted_within_hours"] == 24 * 7
+    assert run_digest_mock.call_args.kwargs["posted_within_label"] == "1 Week"

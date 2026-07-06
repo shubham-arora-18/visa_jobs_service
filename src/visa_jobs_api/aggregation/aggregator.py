@@ -84,17 +84,17 @@ def group_and_sort_by_country(jobs: list[NormalizedJob]) -> list[tuple[str, list
     return [(country, by_country[country]) for country in sorted(by_country)]
 
 
-def digest_headline(job_count: int, *, posted_within_hours: int) -> str:
-    return f"{job_count} Visa-Sponsoring Jobs Posted in the Last {posted_within_hours} Hours"
+def digest_headline(job_count: int, *, posted_within_label: str) -> str:
+    return f"{job_count} Visa-Sponsoring Jobs Posted in the Last {posted_within_label}"
 
 
-def render_digest_html(grouped: list[tuple[str, list[NormalizedJob]]], *, posted_within_hours: int) -> str:
+def render_digest_html(grouped: list[tuple[str, list[NormalizedJob]]], *, posted_within_label: str) -> str:
     """Render the full grouped-and-sorted digest as a self-contained HTML email."""
     job_count = sum(len(jobs) for _, jobs in grouped)
     body_sections = "\n".join(_render_country_section(country, jobs) for country, jobs in grouped) or (
         '<p style="color:#666;">No visa-sponsoring postings found in this window.</p>'
     )
-    headline = digest_headline(job_count, posted_within_hours=posted_within_hours)
+    headline = digest_headline(job_count, posted_within_label=posted_within_label)
     return f"""\
 <html>
 <body style="font-family:-apple-system,Helvetica,Arial,sans-serif;color:#222;max-width:640px;margin:0 auto;padding:16px;">

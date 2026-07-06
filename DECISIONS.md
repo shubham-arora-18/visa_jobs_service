@@ -304,3 +304,42 @@ search-\>description-\>LLM path, including 8 Hugging Face calls that
 completed essentially in parallel), found 3 confirmed sponsoring jobs
 across 2 countries, and a real email ("3 Visa-Sponsoring Jobs Posted in the
 Last 24 Hours") was delivered to the configured recipient via Gmail SMTP.
+
+Later, real 24-hour and 1-week runs took ~40s and ~67s respectively
+end-to-end (both sources, concurrently, through to a delivered email) --
+not a linear blowup with job count, since both stages' concurrency stays
+capped the same way regardless of how many candidates show up.
+
+## Email headline shows a human label ("1 Day"/"1 Week"), not raw hours
+
+`digest_headline`/`render_digest_html` originally took `posted_within_hours: int`
+and rendered e.g. "Last 168 Hours". Per your request, changed to take
+`posted_within_label: str` instead ("1 Day"/"1 Week"/"1 Month") -- a new
+`DigestRunRequest.posted_within_label()` method maps the same
+`posted_within` enum value used for `posted_within_hours()` to the display
+string. The hour count still flows separately to the sources (search
+timespan, recency filtering) unchanged -- only the *email's* wording
+changed, not the actual filtering logic.
+
+## Scheduled daily run (`cli.py`, `.github/workflows/daily-digest.yml`)
+
+Added a `visa-jobs-digest` console script (`cli.py`) that calls the exact
+same `run_digest` service function the FastAPI endpoint uses, with
+`DigestRunRequest()`'s defaults (default LinkedIn keywords, 1-day window)
+-- so the CLI and the API can never drift on "what a run actually does".
+Deliberately does **not** start the FastAPI/uvicorn server and curl it in
+CI -- calling the service function directly is simpler and more robust for
+a one-shot scheduled job than spinning up and tearing down a web server
+just to hit it once.
+
+The GitHub Actions workflow mirrors job_digest's existing
+`daily-digest.yml` pattern exactly (same secrets-based structure), on a
+`30 3 * * *` cron (03:30 UTC = 09:00 IST) plus `workflow_dispatch` for
+manual triggering. Repo secrets/vars needed: `HF_TOKEN`,
+`GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD` (secrets), `DIGEST_RECIPIENTS`,
+`BRIGHTDATA_ZONE` (vars, not sensitive), `BRIGHTDATA_API_KEY` (secret).
+
+Verified locally before adding the workflow: ran `visa-jobs-digest`
+directly (same command CI will run) against live LinkedIn/HN/Hugging
+Face/Gmail -- confirmed a real email ("5 Visa-Sponsoring Jobs Posted in
+the Last 1 Day") was delivered.
