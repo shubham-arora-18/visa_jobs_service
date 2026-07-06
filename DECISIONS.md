@@ -343,3 +343,20 @@ Verified locally before adding the workflow: ran `visa-jobs-digest`
 directly (same command CI will run) against live LinkedIn/HN/Hugging
 Face/Gmail -- confirmed a real email ("5 Visa-Sponsoring Jobs Posted in
 the Last 1 Day") was delivered.
+
+**First real CI run failed** with `brightdata_api_key and brightdata_zone
+are required when via_brightdata=True` -- `BRIGHTDATA_ZONE` had been added
+as a repo *secret* in GitHub's UI, but the workflow read it from
+`vars.BRIGHTDATA_ZONE` (repo *variables*), so it silently resolved to an
+empty string in CI rather than erroring at the GitHub Actions level (a
+missing `vars.*`/`secrets.*` reference just becomes `""`, not a workflow
+failure -- the failure only surfaced once our own code's explicit
+non-empty check caught it). Fixed by reading `secrets.BRIGHTDATA_ZONE`
+instead, matching where it was actually configured, rather than asking to
+move it. Also wired up the six concurrency variables
+(`HN_LLM_CONCURRENCY`, `LINKEDIN_SEARCH_CONCURRENCY`,
+`LINKEDIN_DESCRIPTION_CONCURRENCY`, `LINKEDIN_LLM_CONCURRENCY`,
+`LINKEDIN_POSTS_PER_PAGE`, `LINKEDIN_MAX_PAGES_PER_QUERY`) into the
+workflow's `env:` block -- they'd been added as repo variables but weren't
+actually being passed through to the job at all, so they were silently
+having no effect (falling back to config.py's hardcoded defaults).
