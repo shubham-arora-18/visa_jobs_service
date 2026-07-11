@@ -431,3 +431,168 @@ including titles like "Software Development Engineer, Sponsored Products"
 itself already surfacing them. See
 `indeed_scraper_experiment/DECISIONS.md` for the original review this
 was found and verified against.
+
+## Added Indeed as a third source, via Bright Data
+
+Promoted `indeed_scraper_experiment` from a standalone testing project
+into a real third source (`sources/indeed/`), mirroring LinkedIn's
+pipeline shape exactly: search (paginated) -> dedupe/title-filter ->
+description fetch -> regex + LLM sponsorship confirmation -> `NormalizedJob`.
+
+**Uses Bright Data, not Decodo, deliberately.** Decodo was tested
+extensively against Indeed in `indeed_scraper_experiment` (both `standard`
+and `premium` proxy pools, with and without headless rendering) and found
+to be blocked outright every time -- Indeed's Cloudflare bot-detection
+redirects every request to its login page, sometimes with an honest `401`
+(`standard` pool) and sometimes with a deceptive `200` that still contains
+the login page instead of real results (`premium` pool). Bright Data works
+cleanly. See `indeed_scraper_experiment/DECISIONS.md` for the full
+investigation. `shared/http.py` now supports both `via_decodo` (LinkedIn)
+and `via_brightdata` (Indeed) as alternative fetch paths on the same
+`fetch_html()` function.
+
+**Job Type (Full-time + Permanent) + Experience Level (Senior) filter is
+intentional, not a default this codebase chose.** The user selected these
+directly in Indeed's own search-filter UI and provided the resulting URL
+as a requirement ("make sure you use all the filters that I had
+provided"). Decoded, `sc=0kf:attr(5QWDV|CF3CP,OR)explvl(SENIOR_LEVEL);` --
+see `sources/indeed/search.py::_SC_FILTER`. This does mean Indeed results
+skew toward senior full-time/permanent roles specifically, unlike
+LinkedIn's un-filtered search -- a deliberate difference between the two
+sources' scope, not an oversight.
+
+**Recency window reuses the exact same `posted_within` input** ("day"/
+"week"/"month") already used for LinkedIn, mapped to Indeed's `fromage`
+parameter (which only accepts the values Indeed's own UI exposes: 1/3/7/14
+days, no hour-level control) via `_fromage_for_hours()` -- an hour count
+rounds up to the closest supported option, capping at 14 for anything
+longer (a 30-day "month" window has no exact `fromage` equivalent).
+
+**Restricted to 8 English-dominant job markets** (United States, Canada,
+United Kingdom, Ireland, Australia, New Zealand, Singapore, United Arab
+Emirates), not LinkedIn's full 14-country list. Neither Bright Data's
+`country` geo param nor an `hl=en` URL override reliably forces English
+results on Indeed (tested extensively -- see
+`indeed_scraper_experiment/DECISIONS.md`), so countries whose primary
+business language isn't English (Germany, Netherlands, Switzerland,
+Sweden, France, Japan) are left out rather than risk silently returning
+wrong-language/low-signal results for this English-only
+search+parse+confirm pipeline.
+
+**`indeed_search_concurrency`/`indeed_description_concurrency` default to
+4, not LinkedIn's 10.** This is not an arbitrary, more-conservative
+guess -- 8 concurrent Bright Data requests were empirically found to
+trigger `502 Bad Gateway` from Bright Data's own backend (not Indeed),
+while 4 ran clean across 40 real page fetches with only a single
+retry-recoverable failure. See `indeed_scraper_experiment/DECISIONS.md`.
+`indeed_llm_concurrency` defaults to 16 (matching LinkedIn's), since LLM
+calls go to Hugging Face, not Bright Data, and aren't subject to that
+same ceiling.
+
+**A 0-card search page is retried once before being trusted**, ported
+directly from the experiment's proven fix: a live re-fetch with identical
+parameters was found to return real cards moments after an earlier
+attempt returned 0 for the same query -- the same "page loaded but came
+back empty/blocked" failure mode already guarded against in LinkedIn's
+description fetch.
+
+**No absolute posted-date exists for Indeed** (unlike LinkedIn's `<time
+datetime="...">`) -- `JobCard` has no `posted_on` field, and
+`NormalizedJob.posted_at` uses the fetch time as an approximation
+(recency is already bounded server-side by `fromage`). See
+`sources/indeed/models.py`.
+
+**`DigestRunRequest` gets an independent `indeed_keywords` field**
+(default: the exact expression empirically tested in
+`indeed_scraper_experiment`, `(Python OR Backend OR Java) AND ("sponsor"
+OR "sponsorship")`) alongside the existing `linkedin_keywords` -- tuning
+one source's query never touches the other's, as required.
+
+## Shared title-filter and call-stats modules (LinkedIn + Indeed)
+
+Indeed needed the exact same title filtering (role-noun + domain-signal
+matching, hardware-discipline exclusion -- see the earlier "LinkedIn title
+filter" entry above) and the exact same per-country call-counting pattern
+LinkedIn already had. Rather than copy either a second time into
+`sources/indeed/` -- which is exactly what caused `TITLE_INCLUDE`/
+`TITLE_EXCLUDE` to silently drift out of sync when copied into the
+separate `indeed_scraper_experiment` project -- both moved to
+`shared/title_filter.py` and `shared/call_stats.py`, with LinkedIn
+migrated to use them too. Within a single codebase there's even less
+excuse to duplicate logic twice than there was across two separate
+projects.
+
+## Combined Bright Data / Decodo call tracker, per country, one shared instance per run
+
+Requested explicitly: a single tracker covering **both** Indeed's Bright
+Data calls and LinkedIn's Decodo calls, broken down per country, logged
+once as part of the whole digest run -- not each source logging its own
+separate summary (which is what LinkedIn's original `CallStats` did
+before this change).
+
+`shared/call_stats.py::CallStats` now tracks exactly four counters per
+country: `indeed_search_calls`, `indeed_description_calls`,
+`linkedin_search_calls`, `linkedin_description_calls`. **Deliberately
+excludes LLM call counts** (LinkedIn's original version tracked these
+too) -- LLM calls go to Hugging Face, not Bright Data/Decodo, so they're
+out of scope for what was actually asked for here.
+
+One `CallStats()` instance is created in `digest_service.run_digest()`
+per run and threaded through `build_sources()` into both `LinkedInSource`
+and `IndeedSource` (previously, `LinkedInSource` constructed its own
+private instance internally) -- this is what makes it a single combined
+summary rather than two separate per-source ones. `log_summary()` is
+called from a `finally` block around `collect_jobs()`, not just on
+success, so the breakdown is visible even when a source fails partway
+through a run -- exactly the moment knowing how many calls had already
+gone out is most valuable for debugging.
+
+Output format (one line per country that had any activity):
+```
+United States: Bright Data API calls for Indeed job card: 12  Bright Data API calls for Indeed job details: 8  Decodo API calls for LinkedIn job card: 3  Decodo API calls for LinkedIn job details: 2
+```
+
+## Fixes from adversarial PR review of the Indeed integration
+
+Four issues surfaced by a Principal-Engineer-style review of the full diff
+(shared title-filter/call-stats extraction + Indeed source + combined
+tracker), fixed before merge:
+
+- **VP/SVP title exclusion never matched (blocker).** `TITLE_EXCLUDE`
+  checked for the literal substring `" vp "` (space-padded), so it never
+  fired when "VP"/"SVP" was the first word of a title (no leading space in
+  the raw string) -- e.g. "VP of Software Engineering" passed straight
+  through. Replaced with a dedicated word-boundary regex,
+  `_EXEC_TITLE_RE = re.compile(r"\b(?:[sea]?vp)\b")`, matching `vp`
+  standalone or with a Senior/Executive/Assistant prefix as a whole word
+  anywhere in the title, checked separately from the plain-substring
+  `TITLE_EXCLUDE` list.
+- **Sibling source tasks weren't cancelled on failure.**
+  `collect_jobs()` awaited `asyncio.gather()` over bare coroutines; by
+  default `gather()` does *not* cancel the other awaitables when one
+  raises, so a failing source (say, LinkedIn) left the others (HN, Indeed)
+  still scraping in the background after `run_digest()`'s `httpx.AsyncClient`
+  had already been closed on the way out. Fixed by wrapping each source in
+  an explicit `asyncio.create_task()`, and on any exception from `gather()`,
+  cancelling and awaiting the remaining tasks before re-raising.
+- **`dedupe_cards()` collided across countries.** Keyed only on
+  `(title, company)`, so the same generic title at the same company posted
+  separately in two different countries (common for large multinational
+  employers) silently collided and the later country's listing was
+  dropped. `url` (unique per listing) added to the key: now
+  `(title, company, url)`.
+- **No internal deadline on a digest run.** Indeed's empty-page retry (2
+  attempts) stacked on top of up to `indeed_max_pages_per_query` pages per
+  country, each backed by a 60s Bright Data timeout, meant one query's
+  search phase alone could take several minutes worst-case, with nothing
+  capping the whole `POST /digest/run` call. Added
+  `Settings.digest_run_timeout_seconds` (default 600s) and wrapped
+  `collect_jobs()` in `asyncio.wait_for()` in `run_digest()`.
+
+Left as follow-ups (minor/low-confidence, not blocking): `_SYSTEM_PROMPT`
+duplicated between `linkedin/source.py` and `indeed/source.py`; Indeed's
+`fromage` silently capping a "month" request at 14 days instead of 30 with
+no indication in the response; Indeed's Job Type/Experience Level filter
+(`_SC_FILTER`) hardcoded with no config override; synchronous BeautifulSoup
+parsing inside async functions (pre-existing pattern, now used by two
+sources instead of one).

@@ -1,9 +1,9 @@
-"""Wires the LinkedIn pipeline into a single async JobSource."""
+"""Wires the Indeed pipeline into a single async JobSource."""
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, timezone
 
 import httpx
 
@@ -14,10 +14,10 @@ from visa_jobs_api.shared.models import NormalizedJob
 from visa_jobs_api.shared.title_filter import dedupe_cards, filter_by_title
 from visa_jobs_api.shared.visa_keywords import find_visa_mentions
 from visa_jobs_api.shared.visa_llm import build_client, confirm_visa_offer
-from visa_jobs_api.sources.linkedin.description import fetch_all_descriptions
-from visa_jobs_api.sources.linkedin.models import LinkedInJobCandidate
-from visa_jobs_api.sources.linkedin.queries import DEFAULT_KEYWORDS, build_search_queries
-from visa_jobs_api.sources.linkedin.search import fetch_all_job_cards
+from visa_jobs_api.sources.indeed.description import fetch_all_descriptions
+from visa_jobs_api.sources.indeed.models import IndeedJobCandidate
+from visa_jobs_api.sources.indeed.queries import DEFAULT_KEYWORDS, build_search_queries
+from visa_jobs_api.sources.indeed.search import fetch_all_job_cards
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +38,10 @@ _SYSTEM_PROMPT = (
 )
 
 
-class LinkedInSource:
-    """Produces normalized, visa-confirmed job listings from LinkedIn's guest search API."""
+class IndeedSource:
+    """Produces normalized, visa-confirmed job listings from Indeed's search results."""
 
-    name = "linkedin"
+    name = "indeed"
 
     def __init__(
         self,
@@ -70,10 +70,11 @@ class LinkedInSource:
         )
         logger.info("%s: %d job cards scraped", self.name, len(cards))
 
+        # Recency is already enforced server-side via the `fromage` search
+        # parameter (see search.py) -- unlike LinkedIn, there's no
+        # per-card posted date to additionally filter on client-side.
         cards = filter_by_title(dedupe_cards(cards))
-        earliest_posted_on = (datetime.now(tz=timezone.utc) - timedelta(hours=self._posted_within_hours)).date()
-        cards = [card for card in cards if card.posted_on >= earliest_posted_on]
-        logger.info("%s: %d cards after dedup/title-filter/recency-window", self.name, len(cards))
+        logger.info("%s: %d cards after dedup/title-filter", self.name, len(cards))
 
         candidates = await fetch_all_descriptions(
             self._http_client, cards, settings=self._settings, stats=self._call_stats
@@ -81,7 +82,7 @@ class LinkedInSource:
         confirmed = await gather_limited(
             candidates,
             self._confirm_candidate,
-            limit=self._settings.linkedin_llm_concurrency,
+            limit=self._settings.indeed_llm_concurrency,
         )
         jobs = [job for job in confirmed if job is not None]
         logger.info(
@@ -89,11 +90,13 @@ class LinkedInSource:
         )
         return jobs
 
-    async def _confirm_candidate(self, candidate: LinkedInJobCandidate) -> NormalizedJob | None:
+    async def _confirm_candidate(self, candidate: IndeedJobCandidate) -> NormalizedJob | None:
         # The regex mention-finder is English-only, so for any other
         # language it's skipped entirely and every posting goes straight to
         # the LLM instead -- see shared.visa_llm and
-        # linkedin_visa_scraper/DECISIONS.md for why.
+        # linkedin_visa_scraper/DECISIONS.md for why. Every country Indeed
+        # is searched in is English-dominant (see country_domains.py), so
+        # this branch is mostly a defensive fallback here.
         if candidate.language == "en":
             mentions = find_visa_mentions(candidate.description)
             if not mentions:
@@ -106,19 +109,18 @@ class LinkedInSource:
             system_prompt=_SYSTEM_PROMPT,
             full_text=candidate.description,
             mentions=mentions,
-            log_context=f"LinkedIn job {candidate.card.url}",
+            log_context=f"Indeed job {candidate.card.url}",
         )
         if not verdict.offers_sponsorship:
             return None
 
         # The country a card came from is already known exactly -- it's
-        # whichever SearchQuery.location produced it (see queries.py) --
-        # rather than a guess parsed from LinkedIn's freeform location text,
-        # which varies by country and breaks for US state abbreviations
-        # ("San Francisco, CA") and comma-less metro names ("Greater
-        # Pittsburgh Region") alike.
+        # whichever SearchQuery.country produced it (see queries.py) --
+        # rather than a guess parsed from Indeed's freeform location text,
+        # same reasoning as LinkedIn's query_country (see
+        # sources/linkedin/source.py).
         country = candidate.card.query_country
-        # There's no regex-based tech detector for LinkedIn descriptions
+        # There's no regex-based tech detector for Indeed descriptions
         # (unlike HN), so the LLM's reading of the text is the only source
         # for tech_stack here.
         return NormalizedJob(
@@ -126,7 +128,12 @@ class LinkedInSource:
             title=candidate.card.title,
             company=candidate.card.company,
             url=candidate.card.url,
-            posted_at=datetime.combine(candidate.card.posted_on, time.min, tzinfo=timezone.utc),
+            # Indeed has no absolute posted-date anywhere in the visible
+            # search-result card (unlike LinkedIn's <time datetime=...>) --
+            # recency is bounded by the `fromage` search filter instead, so
+            # the fetch time is used as an approximation, not a real
+            # posted-on date. See sources/indeed/models.py's JobCard docstring.
+            posted_at=datetime.now(tz=timezone.utc),
             country=country,
             location_label=candidate.card.location or "Not specified",
             tech_stack=verdict.tech_stack,

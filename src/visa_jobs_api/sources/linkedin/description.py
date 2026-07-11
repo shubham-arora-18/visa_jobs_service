@@ -22,9 +22,9 @@ from langdetect import detect as detect_language
 from langdetect.lang_detect_exception import LangDetectException
 
 from visa_jobs_api.config import Settings
+from visa_jobs_api.shared.call_stats import CallStats
 from visa_jobs_api.shared.concurrency import gather_limited
 from visa_jobs_api.shared.http import fetch_html
-from visa_jobs_api.sources.linkedin.call_stats import CallStats
 from visa_jobs_api.sources.linkedin.models import JobCard, LinkedInJobCandidate
 
 logger = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ async def _fetch_one_description(
         decodo_username=settings.decodo_username,
         decodo_password=settings.decodo_password,
     )
-    stats.record_description_call(card.query_country)
+    stats.record_linkedin_description_call(card.query_country)
     description = _extract_description_text(html)
     if description is None:
         logger.warning("No description block found for %s -- skipping", card.url)

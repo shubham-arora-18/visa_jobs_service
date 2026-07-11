@@ -28,15 +28,36 @@ class Settings(BaseSettings):
     decodo_username: str
     decodo_password: str
 
+    # Bright Data -- used only for Indeed (Decodo is blocked outright for
+    # Indeed by its Cloudflare bot-detection; see shared/http.py's docstring).
+    brightdata_api_key: str
+    brightdata_zone: str
+
     # Per-stage concurrency caps.
     hn_llm_concurrency: int = Field(default=5, gt=0)
     linkedin_search_concurrency: int = Field(default=10, gt=0)
     linkedin_description_concurrency: int = Field(default=10, gt=0)
     linkedin_llm_concurrency: int = Field(default=16, gt=0)
+    # 4 is not an arbitrary choice -- 8 concurrent Bright Data requests were
+    # found to trigger "502 Bad Gateway" from Bright Data's own backend
+    # (not Indeed), while 4 ran clean; see indeed_scraper_experiment/DECISIONS.md.
+    indeed_search_concurrency: int = Field(default=4, gt=0)
+    indeed_description_concurrency: int = Field(default=4, gt=0)
+    indeed_llm_concurrency: int = Field(default=16, gt=0)
 
     # LinkedIn search pagination.
     linkedin_posts_per_page: int = Field(default=10, gt=0)
     linkedin_max_pages_per_query: int = Field(default=3, gt=0)
+
+    # Indeed search pagination.
+    indeed_posts_per_page: int = Field(default=15, gt=0)
+    indeed_max_pages_per_query: int = Field(default=4, gt=0)
+
+    # Upper bound on collect_jobs() across all sources -- with per-country
+    # retries/pagination and a 60s-per-request proxy timeout on both Bright
+    # Data and Decodo, an unbounded run can otherwise stretch into many
+    # minutes with nothing timing it out from inside the app.
+    digest_run_timeout_seconds: int = Field(default=600, gt=0)
 
     def recipient_list(self) -> list[str]:
         recipients = [email.strip() for email in self.digest_recipients.split(",") if email.strip()]

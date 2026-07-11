@@ -24,9 +24,9 @@ import httpx
 from bs4 import BeautifulSoup, Tag
 
 from visa_jobs_api.config import Settings
+from visa_jobs_api.shared.call_stats import CallStats
 from visa_jobs_api.shared.concurrency import gather_limited
 from visa_jobs_api.shared.http import fetch_html
-from visa_jobs_api.sources.linkedin.call_stats import CallStats
 from visa_jobs_api.sources.linkedin.models import JobCard, SearchQuery
 
 logger = logging.getLogger(__name__)
@@ -92,7 +92,7 @@ async def _fetch_query_job_cards(
             decodo_username=settings.decodo_username,
             decodo_password=settings.decodo_password,
         )
-        stats.record_search_call(query.location)
+        stats.record_linkedin_search_call(query.location)
         page_cards = _parse_job_cards(html, query_country=query.location)
         cards.extend(page_cards)
         if len(page_cards) < page_size:

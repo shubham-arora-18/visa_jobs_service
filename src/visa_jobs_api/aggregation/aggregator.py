@@ -14,10 +14,13 @@ import logging
 import httpx
 
 from visa_jobs_api.config import Settings
+from visa_jobs_api.shared.call_stats import CallStats
 from visa_jobs_api.shared.models import NormalizedJob
 from visa_jobs_api.sources import JobSource
 from visa_jobs_api.sources.hn_who_is_hiring.source import HnWhoIsHiringSource
-from visa_jobs_api.sources.linkedin.queries import DEFAULT_KEYWORDS
+from visa_jobs_api.sources.indeed.queries import DEFAULT_KEYWORDS as INDEED_DEFAULT_KEYWORDS
+from visa_jobs_api.sources.indeed.source import IndeedSource
+from visa_jobs_api.sources.linkedin.queries import DEFAULT_KEYWORDS as LINKEDIN_DEFAULT_KEYWORDS
 from visa_jobs_api.sources.linkedin.source import LinkedInSource
 
 logger = logging.getLogger(__name__)
@@ -33,7 +36,9 @@ def build_sources(
     *,
     settings: Settings,
     http_client: httpx.AsyncClient,
-    linkedin_keywords: str = DEFAULT_KEYWORDS,
+    call_stats: CallStats,
+    linkedin_keywords: str = LINKEDIN_DEFAULT_KEYWORDS,
+    indeed_keywords: str = INDEED_DEFAULT_KEYWORDS,
     posted_within_hours: int = 24,
 ) -> list[JobSource]:
     return [
@@ -41,7 +46,15 @@ def build_sources(
         LinkedInSource(
             settings=settings,
             http_client=http_client,
+            call_stats=call_stats,
             keywords=linkedin_keywords,
+            posted_within_hours=posted_within_hours,
+        ),
+        IndeedSource(
+            settings=settings,
+            http_client=http_client,
+            call_stats=call_stats,
+            keywords=indeed_keywords,
             posted_within_hours=posted_within_hours,
         ),
     ]
@@ -54,6 +67,13 @@ async def collect_jobs(sources: list[JobSource]) -> list[NormalizedJob]:
     source produced it before re-raising -- the whole run is meant to fail
     loudly (and be reported by the caller) rather than silently send a
     digest missing a broken source's postings.
+
+    Sources run as explicit tasks (not bare coroutines passed to gather) so
+    that if one fails, the still-running siblings can be cancelled and
+    awaited before the exception propagates -- otherwise they'd keep
+    scraping in the background after the caller's httpx.AsyncClient is
+    closed on the way out, and any calls they still made would never be
+    reflected in the call-stats summary already logged by then.
     """
 
     async def _run(source: JobSource) -> list[NormalizedJob]:
@@ -63,7 +83,14 @@ async def collect_jobs(sources: list[JobSource]) -> list[NormalizedJob]:
         except Exception as exc:
             raise DigestBuildError(f"source '{source.name}' failed: {exc}") from exc
 
-    results = await asyncio.gather(*(_run(source) for source in sources))
+    tasks = [asyncio.create_task(_run(source)) for source in sources]
+    try:
+        results = await asyncio.gather(*tasks)
+    except BaseException:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
     return [job for jobs in results for job in jobs]
 
 

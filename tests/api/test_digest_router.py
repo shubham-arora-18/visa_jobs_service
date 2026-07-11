@@ -7,7 +7,8 @@ from fastapi.testclient import TestClient
 
 from visa_jobs_api.api.dto.digest import DigestRunResponse, SourceCount
 from visa_jobs_api.main import app
-from visa_jobs_api.sources.linkedin.queries import DEFAULT_KEYWORDS
+from visa_jobs_api.sources.indeed.queries import DEFAULT_KEYWORDS as INDEED_DEFAULT_KEYWORDS
+from visa_jobs_api.sources.linkedin.queries import DEFAULT_KEYWORDS as LINKEDIN_DEFAULT_KEYWORDS
 
 
 @pytest.fixture
@@ -58,7 +59,8 @@ def test_trigger_digest_run_defaults_to_default_keywords_and_a_day_window(
 
     client.post("/digest/run")
 
-    assert run_digest_mock.call_args.kwargs["linkedin_keywords"] == DEFAULT_KEYWORDS
+    assert run_digest_mock.call_args.kwargs["linkedin_keywords"] == LINKEDIN_DEFAULT_KEYWORDS
+    assert run_digest_mock.call_args.kwargs["indeed_keywords"] == INDEED_DEFAULT_KEYWORDS
     assert run_digest_mock.call_args.kwargs["posted_within_hours"] == 24
     assert run_digest_mock.call_args.kwargs["posted_within_label"] == "1 Day"
 
@@ -70,8 +72,16 @@ def test_trigger_digest_run_passes_through_custom_keywords_and_window(
     run_digest_mock = AsyncMock(return_value=fake_response)
     monkeypatch.setattr("visa_jobs_api.api.routers.digest.run_digest", run_digest_mock)
 
-    client.post("/digest/run", json={"linkedin_keywords": "(Rust OR Go) AND sponsor", "posted_within": "week"})
+    client.post(
+        "/digest/run",
+        json={
+            "linkedin_keywords": "(Rust OR Go) AND sponsor",
+            "indeed_keywords": "(Rust OR Go) AND \"sponsor\"",
+            "posted_within": "week",
+        },
+    )
 
     assert run_digest_mock.call_args.kwargs["linkedin_keywords"] == "(Rust OR Go) AND sponsor"
+    assert run_digest_mock.call_args.kwargs["indeed_keywords"] == '(Rust OR Go) AND "sponsor"'
     assert run_digest_mock.call_args.kwargs["posted_within_hours"] == 24 * 7
     assert run_digest_mock.call_args.kwargs["posted_within_label"] == "1 Week"

@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from visa_jobs_api.config import Settings
-from visa_jobs_api.sources.linkedin.call_stats import CallStats
+from visa_jobs_api.shared.call_stats import CallStats
 from visa_jobs_api.sources.linkedin.models import SearchQuery
 from visa_jobs_api.sources.linkedin.search import _parse_job_cards, fetch_all_job_cards
 
@@ -38,6 +38,8 @@ def _settings(**overrides: object) -> Settings:
         digest_recipients="me@example.com",
         decodo_username="decodo-user",
         decodo_password="decodo-pass",
+        brightdata_api_key="bd-key",
+        brightdata_zone="bd-zone",
         linkedin_posts_per_page=2,
         linkedin_max_pages_per_query=3,
         linkedin_search_concurrency=5,
@@ -134,4 +136,4 @@ async def test_fetch_all_job_cards_records_one_search_call_per_page_fetched(monk
 
     # 2 pages fetched for Ireland (full page then partial page) -> 2 recorded
     # search calls, keyed by the query's own country.
-    assert stats.search_calls == {"Ireland": 2}
+    assert stats.linkedin_search_calls == {"Ireland": 2}

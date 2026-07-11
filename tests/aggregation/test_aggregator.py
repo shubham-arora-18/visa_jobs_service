@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 import pytest
@@ -64,6 +65,26 @@ async def test_collect_jobs_tags_failure_with_source_name() -> None:
 
     with pytest.raises(DigestBuildError, match="source 'broken' failed: network down"):
         await collect_jobs(sources)
+
+
+async def test_collect_jobs_cancels_slower_sources_when_one_fails() -> None:
+    ran_to_completion = False
+
+    class _SlowSource:
+        name = "slow"
+
+        async def fetch_jobs(self) -> list[NormalizedJob]:
+            nonlocal ran_to_completion
+            await asyncio.sleep(0.2)
+            ran_to_completion = True
+            return []
+
+    sources = [_SlowSource(), _FakeSource("broken", error=ValueError("boom"))]
+
+    with pytest.raises(DigestBuildError):
+        await collect_jobs(sources)
+
+    assert ran_to_completion is False
 
 
 def test_group_and_sort_by_country_orders_countries_alphabetically() -> None:

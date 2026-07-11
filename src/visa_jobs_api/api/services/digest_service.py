@@ -8,6 +8,7 @@ only knows about sources and NormalizedJob.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import httpx
@@ -22,8 +23,10 @@ from visa_jobs_api.aggregation.aggregator import (
 from visa_jobs_api.api.dto.digest import DigestRunResponse, SourceCount
 from visa_jobs_api.config import Settings
 from visa_jobs_api.emailer import send_failure_email, send_success_email
+from visa_jobs_api.shared.call_stats import CallStats
 from visa_jobs_api.shared.models import NormalizedJob
-from visa_jobs_api.sources.linkedin.queries import DEFAULT_KEYWORDS
+from visa_jobs_api.sources.indeed.queries import DEFAULT_KEYWORDS as INDEED_DEFAULT_KEYWORDS
+from visa_jobs_api.sources.linkedin.queries import DEFAULT_KEYWORDS as LINKEDIN_DEFAULT_KEYWORDS
 
 logger = logging.getLogger(__name__)
 
@@ -31,11 +34,12 @@ logger = logging.getLogger(__name__)
 async def run_digest(
     *,
     settings: Settings,
-    linkedin_keywords: str = DEFAULT_KEYWORDS,
+    linkedin_keywords: str = LINKEDIN_DEFAULT_KEYWORDS,
+    indeed_keywords: str = INDEED_DEFAULT_KEYWORDS,
     posted_within_hours: int = 24,
     posted_within_label: str = "1 Day",
 ) -> DigestRunResponse:
-    """Run both sources in parallel, aggregate+group+sort, email the digest, and summarize the run.
+    """Run all sources in parallel, aggregate+group+sort, email the digest, and summarize the run.
 
     Any failure anywhere in the pipeline is reported via a failure email
     (mirroring job_digest's cli.py "never fail silently on an unattended
@@ -43,15 +47,26 @@ async def run_digest(
     this over HTTP still sees an error response rather than a false
     "success".
     """
+    call_stats = CallStats()
     try:
         async with httpx.AsyncClient() as http_client:
             sources = build_sources(
                 settings=settings,
                 http_client=http_client,
+                call_stats=call_stats,
                 linkedin_keywords=linkedin_keywords,
+                indeed_keywords=indeed_keywords,
                 posted_within_hours=posted_within_hours,
             )
-            jobs = await collect_jobs(sources)
+            # Logged even if a source fails partway through (finally, not
+            # after) -- this is exactly when knowing how many Bright
+            # Data/Decodo calls had already gone out is most useful.
+            try:
+                jobs = await asyncio.wait_for(
+                    collect_jobs(sources), timeout=settings.digest_run_timeout_seconds
+                )
+            finally:
+                call_stats.log_summary(logger)
 
         grouped = group_and_sort_by_country(jobs)
         subject = digest_headline(len(jobs), posted_within_label=posted_within_label)

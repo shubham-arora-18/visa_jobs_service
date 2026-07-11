@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from visa_jobs_api.config import Settings
-from visa_jobs_api.sources.linkedin.call_stats import CallStats
+from visa_jobs_api.shared.call_stats import CallStats
 from visa_jobs_api.sources.linkedin.description import _extract_description_text, fetch_all_descriptions
 from visa_jobs_api.sources.linkedin.models import JobCard
 
@@ -19,6 +19,8 @@ def _settings(**overrides: object) -> Settings:
         digest_recipients="me@example.com",
         decodo_username="decodo-user",
         decodo_password="decodo-pass",
+        brightdata_api_key="bd-key",
+        brightdata_zone="bd-zone",
         linkedin_description_concurrency=5,
     )
     defaults.update(overrides)
@@ -86,4 +88,4 @@ async def test_fetch_all_descriptions_records_one_call_per_card_by_query_country
     async with httpx.AsyncClient() as client:
         await fetch_all_descriptions(client, cards, settings=_settings(), stats=stats)
 
-    assert stats.description_calls == {"Ireland": 2, "Germany": 1}
+    assert stats.linkedin_description_calls == {"Ireland": 2, "Germany": 1}
