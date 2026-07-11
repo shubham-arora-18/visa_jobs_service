@@ -395,3 +395,39 @@ sent), while the same requests worked immediately off that network. This
 doesn't affect GitHub Actions (runs on GitHub-hosted runners, not this
 VPN) but is worth knowing if this ever needs debugging from this laptop
 again.
+
+## LinkedIn title filter: fixed-phrase matching was silently dropping real jobs
+
+Ported a fix from a separate experiment (`indeed_scraper_experiment`, which
+had copied this exact `TITLE_INCLUDE`/`TITLE_EXCLUDE` list verbatim). A
+manual review there of ~90 real Indeed job cards found the original
+fixed-phrase approach was wrongly excluding a real chunk of relevant
+titles -- "Full Stack AI Engineer" doesn't contain the literal substring
+"full stack engineer" (the inserted "AI" breaks it), and there was no
+entry at all for "AI Engineer", "DevOps Engineer", "Cloud Architect", or
+"Full Stack **Developer**" (only "...Engineer" was covered). Since this is
+the exact same list and matching logic LinkedIn's `queries.py`/`extract.py`
+used, the same bug was live here too.
+
+Replaced fixed-phrase matching with **role-noun + domain-signal
+co-occurrence**: a title passes if it contains any of `TECH_ROLE_NOUNS`
+(engineer/developer/architect/programmer) *and* any of
+`TECH_DOMAIN_SIGNALS` (software/cloud/devops/ai/platform/...) *anywhere*
+in the title, not necessarily adjacent -- this generalizes past the
+exact-phrase problem for free. The broader net needed a new safeguard,
+`HARDWARE_DISCIPLINE_EXCLUDE` (electrical/mechanical/sensor/desktop/etc.),
+checked before the role+domain rule -- without it, "Principal Desktop
+Engineer" would pass on "principal" + "engineer" alone, and "Senior
+Electrical Engineer" would pass on bare "engineer". The original
+`TITLE_INCLUDE` list is kept, shrunk to a handful of literal phrases for
+real titles with no role noun at all ("Tech Lead") or no clean domain
+signal ("Release Engineer").
+
+Verified live against real LinkedIn data (3 countries, current production
+`.env`) before considering this done: of 274 deduped real cards, the old
+filter kept 128 and the new one keeps 179 -- a 51-title improvement,
+including titles like "Software Development Engineer, Sponsored Products"
+(Amazon, twice) that were being silently dropped despite the search query
+itself already surfacing them. See
+`indeed_scraper_experiment/DECISIONS.md` for the original review this
+was found and verified against.
