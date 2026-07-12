@@ -8,8 +8,10 @@ linkedin_visa_scraper/DECISIONS.md: that exact silent-fallback bug made an
 entire run's LinkedIn results look like zero jobs offered sponsorship, when
 in fact every description fetch had been rate-limited/blocked and simply
 never got real content to check). A network-level fetch failure
-(shared.http.FetchError) is not caught here at all -- it propagates and
-aborts the whole source's run, consistent with the JobSource contract.
+(shared.http.FetchError) is caught here too, for the same reason: one job
+whose description page is unreachable after retries must not cost the whole
+source (let alone the whole digest run) every other job it already found --
+it's logged loudly and that one job is skipped instead.
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ from langdetect.lang_detect_exception import LangDetectException
 from visa_jobs_api.config import Settings
 from visa_jobs_api.shared.call_stats import CallStats
 from visa_jobs_api.shared.concurrency import gather_limited
-from visa_jobs_api.shared.http import fetch_html
+from visa_jobs_api.shared.http import FetchError, fetch_html
 from visa_jobs_api.sources.linkedin.models import JobCard, LinkedInJobCandidate
 
 logger = logging.getLogger(__name__)
@@ -59,13 +61,17 @@ def _detect_language(text: str) -> str:
 async def _fetch_one_description(
     client: httpx.AsyncClient, card: JobCard, *, settings: Settings, stats: CallStats
 ) -> LinkedInJobCandidate | None:
-    html = await fetch_html(
-        client,
-        card.url,
-        via_decodo=True,
-        decodo_username=settings.decodo_username,
-        decodo_password=settings.decodo_password,
-    )
+    try:
+        html = await fetch_html(
+            client,
+            card.url,
+            via_decodo=True,
+            decodo_username=settings.decodo_username,
+            decodo_password=settings.decodo_password,
+        )
+    except FetchError as exc:
+        logger.error("Failed to fetch description for %s -- skipping this job: %s", card.url, exc)
+        return None
     stats.record_linkedin_description_call(card.query_country)
     description = _extract_description_text(html)
     if description is None:

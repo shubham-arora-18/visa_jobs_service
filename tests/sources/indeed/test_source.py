@@ -8,6 +8,7 @@ import pytest
 
 from visa_jobs_api.config import Settings
 from visa_jobs_api.shared.call_stats import CallStats
+from visa_jobs_api.shared.visa_llm import LlmVerdict, VisaLlmError
 from visa_jobs_api.sources.indeed.models import IndeedJobCandidate, JobCard
 from visa_jobs_api.sources.indeed.source import IndeedSource
 
@@ -154,3 +155,38 @@ async def test_fetch_jobs_applies_title_filter_and_dedup(monkeypatch: pytest.Mon
         "https://www.indeed.com/viewjob?jk=1",
         "https://www.indeed.com/viewjob?jk=3",
     ]
+
+
+async def test_fetch_jobs_skips_a_candidate_whose_llm_call_fails_but_keeps_the_rest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An LLM confirmation failure for one job (e.g. a malformed response)
+    # must not cost the whole source every other job it already confirmed.
+    failing = _card(url="https://www.indeed.com/viewjob?jk=1")
+    working = _card(url="https://www.indeed.com/viewjob?jk=2")
+    candidates = [
+        IndeedJobCandidate(card=failing, description="We offer visa sponsorship.", language="en"),
+        IndeedJobCandidate(card=working, description="We offer visa sponsorship.", language="en"),
+    ]
+
+    monkeypatch.setattr(
+        "visa_jobs_api.sources.indeed.source.fetch_all_job_cards", AsyncMock(return_value=[failing, working])
+    )
+    monkeypatch.setattr(
+        "visa_jobs_api.sources.indeed.source.fetch_all_descriptions", AsyncMock(return_value=candidates)
+    )
+    monkeypatch.setattr("visa_jobs_api.sources.indeed.source.build_client", lambda hf_token: MagicMock())
+
+    async def fake_confirm_visa_offer(*, log_context, **kwargs):
+        if "jk=1" in log_context:
+            raise VisaLlmError("LLM response was not valid JSON")
+        return LlmVerdict(offers_sponsorship=True, reason="explicit offer")
+
+    monkeypatch.setattr("visa_jobs_api.sources.indeed.source.confirm_visa_offer", fake_confirm_visa_offer)
+
+    async with httpx.AsyncClient() as http_client:
+        source = IndeedSource(settings=_settings(), http_client=http_client, call_stats=CallStats())
+        jobs = await source.fetch_jobs()
+
+    assert len(jobs) == 1
+    assert jobs[0].url == "https://www.indeed.com/viewjob?jk=2"

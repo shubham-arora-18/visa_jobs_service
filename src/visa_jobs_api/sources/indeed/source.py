@@ -13,7 +13,7 @@ from visa_jobs_api.shared.concurrency import gather_limited
 from visa_jobs_api.shared.models import NormalizedJob
 from visa_jobs_api.shared.title_filter import dedupe_cards, filter_by_title
 from visa_jobs_api.shared.visa_keywords import find_visa_mentions
-from visa_jobs_api.shared.visa_llm import build_client, confirm_visa_offer
+from visa_jobs_api.shared.visa_llm import VisaLlmError, build_client, confirm_visa_offer
 from visa_jobs_api.sources.indeed.description import fetch_all_descriptions
 from visa_jobs_api.sources.indeed.models import IndeedJobCandidate
 from visa_jobs_api.sources.indeed.queries import DEFAULT_KEYWORDS, build_search_queries
@@ -104,13 +104,17 @@ class IndeedSource:
         else:
             mentions = []
 
-        verdict = await confirm_visa_offer(
-            client=self._llm_client,
-            system_prompt=_SYSTEM_PROMPT,
-            full_text=candidate.description,
-            mentions=mentions,
-            log_context=f"Indeed job {candidate.card.url}",
-        )
+        try:
+            verdict = await confirm_visa_offer(
+                client=self._llm_client,
+                system_prompt=_SYSTEM_PROMPT,
+                full_text=candidate.description,
+                mentions=mentions,
+                log_context=f"Indeed job {candidate.card.url}",
+            )
+        except VisaLlmError as exc:
+            logger.error("LLM confirmation failed for %s -- skipping this job: %s", candidate.card.url, exc)
+            return None
         if not verdict.offers_sponsorship:
             return None
 

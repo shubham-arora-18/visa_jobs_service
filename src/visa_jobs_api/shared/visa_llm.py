@@ -78,9 +78,7 @@ class LlmVerdict(BaseModel):
         # on a real week-window run) -- a labeling nuance, not a sign the
         # response is malformed. Unlike offers_sponsorship/reason/country
         # (where a type mismatch really would mean something is broken),
-        # failing the entire job -- and by extension the whole digest run,
-        # since one job's ValidationError aborts collect_jobs for both
-        # sources -- over an imprecise category label is a wildly
+        # failing this one job over an imprecise category label is a wildly
         # disproportionate cost. Coerce to "Other" with a loud log line
         # instead of raising.
         if value not in _VALID_ROLE_GROUPS:

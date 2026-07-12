@@ -12,6 +12,11 @@ indeed_scraper_experiment/DECISIONS.md) -- the same "page loaded but came
 back empty/blocked" failure mode already documented for LinkedIn (silently
 treating that as "no jobs found" previously made an entire real digest run
 look like zero sponsorship offers).
+
+A page that still fails to fetch after those retries (shared.http.FetchError)
+stops that one query's pagination early, keeping whatever pages it already
+gathered, rather than failing the whole query -- and, in turn, the whole
+source or digest run -- over one bad page.
 """
 
 from __future__ import annotations
@@ -24,7 +29,7 @@ import httpx
 from visa_jobs_api.config import Settings
 from visa_jobs_api.shared.call_stats import CallStats
 from visa_jobs_api.shared.concurrency import gather_limited
-from visa_jobs_api.shared.http import fetch_html
+from visa_jobs_api.shared.http import FetchError, fetch_html
 from visa_jobs_api.sources.indeed.country_domains import COUNTRY_DOMAINS
 from visa_jobs_api.sources.indeed.extract import parse_job_cards
 from visa_jobs_api.sources.indeed.models import JobCard, SearchQuery
@@ -107,9 +112,21 @@ async def _fetch_query_job_cards(
         url = _build_search_url(
             domain, keywords=query.keywords, start=page_size * page, posted_within_hours=posted_within_hours
         )
-        page_cards = await _fetch_one_page(
-            client, url, domain=domain, geo=geo, query_country=query.country, settings=settings, stats=stats
-        )
+        try:
+            page_cards = await _fetch_one_page(
+                client, url, domain=domain, geo=geo, query_country=query.country, settings=settings, stats=stats
+            )
+        except FetchError as exc:
+            logger.error(
+                "Indeed search %r/%r: page %d failed to fetch -- keeping the %d card(s) already "
+                "gathered for this query: %s",
+                query.keywords,
+                query.country,
+                page,
+                len(cards),
+                exc,
+            )
+            break
         cards.extend(page_cards)
         if len(page_cards) < page_size:
             break

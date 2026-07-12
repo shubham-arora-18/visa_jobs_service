@@ -41,11 +41,17 @@ async def run_digest(
 ) -> DigestRunResponse:
     """Run all sources in parallel, aggregate+group+sort, email the digest, and summarize the run.
 
-    Any failure anywhere in the pipeline is reported via a failure email
+    A source failing (or a single URL within it) never blocks the digest
+    from being sent -- collect_jobs() already turns those into
+    SourceFailure entries instead of raising, and this function folds them
+    into the email (see render_digest_html) and the response
+    (source_failures) rather than treating them as run-ending errors. Only
+    a genuinely catastrophic, non-source-attributable failure (e.g. the
+    overall run timing out, or the email step itself erroring) reaches the
+    except block below, which still reports it via a failure email
     (mirroring job_digest's cli.py "never fail silently on an unattended
-    run" pattern) before the exception is re-raised, so a caller triggering
-    this over HTTP still sees an error response rather than a false
-    "success".
+    run" pattern) before re-raising, so a caller triggering this over HTTP
+    still sees an error response rather than a false "success".
     """
     call_stats = CallStats()
     try:
@@ -62,15 +68,18 @@ async def run_digest(
             # after) -- this is exactly when knowing how many Bright
             # Data/Decodo calls had already gone out is most useful.
             try:
-                jobs = await asyncio.wait_for(
+                jobs, failures = await asyncio.wait_for(
                     collect_jobs(sources), timeout=settings.digest_run_timeout_seconds
                 )
             finally:
                 call_stats.log_summary(logger)
 
+        for failure in failures:
+            logger.error("Source '%s' did not complete this run: %s", failure.source, failure.error)
+
         grouped = group_and_sort_by_country(jobs)
         subject = digest_headline(len(jobs), posted_within_label=posted_within_label)
-        html_body = render_digest_html(grouped, posted_within_label=posted_within_label)
+        html_body = render_digest_html(grouped, posted_within_label=posted_within_label, failures=failures)
 
         await send_success_email(settings=settings, subject=subject, html_body=html_body)
         logger.info("Digest sent successfully: %s", subject)
@@ -80,6 +89,7 @@ async def run_digest(
             countries=len(grouped),
             by_source=_count_by_source(jobs),
             email_sent_to=settings.recipient_list(),
+            source_failures=[f"{failure.source}: {failure.error}" for failure in failures],
         )
     except Exception as exc:
         logger.exception("Digest run failed")

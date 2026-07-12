@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,6 +24,15 @@ class Settings(BaseSettings):
     gmail_address: str
     gmail_app_password: str
     digest_recipients: str
+
+    @field_validator("gmail_app_password")
+    @classmethod
+    def _strip_app_password_spaces(cls, value: str) -> str:
+        # Google's UI displays app passwords as 4 space-separated groups
+        # for readability, and pasting it verbatim (spaces included) into
+        # an env var is an easy, silent way to end up with a `535 Username
+        # and Password not accepted` SMTP auth failure.
+        return value.replace(" ", "")
 
     decodo_username: str
     decodo_password: str

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+from typing import NamedTuple
 
 import httpx
 
@@ -28,8 +29,11 @@ logger = logging.getLogger(__name__)
 _REMOTE_OR_UNSPECIFIED = "Remote / Unspecified"
 
 
-class DigestBuildError(RuntimeError):
-    """Raised when a source fails to produce its job listings."""
+class SourceFailure(NamedTuple):
+    """One source that didn't complete this run, and why."""
+
+    source: str
+    error: str
 
 
 def build_sources(
@@ -60,28 +64,32 @@ def build_sources(
     ]
 
 
-async def collect_jobs(sources: list[JobSource]) -> list[NormalizedJob]:
-    """Run every source concurrently, returning their combined, still-ungrouped job lists.
+async def collect_jobs(sources: list[JobSource]) -> tuple[list[NormalizedJob], list[SourceFailure]]:
+    """Run every source concurrently, returning their combined jobs plus any per-source failures.
 
-    A source's internal exception is caught only to tag it with which
-    source produced it before re-raising -- the whole run is meant to fail
-    loudly (and be reported by the caller) rather than silently send a
-    digest missing a broken source's postings.
+    A source's exception is caught, logged, and recorded as a SourceFailure
+    instead of aborting the run -- one broken source (or a single bad URL
+    within it, which each source already handles on its own) must never
+    cost the digest the results of every other source that worked fine.
+    The caller decides what to do with the returned failures (e.g. mention
+    them in the digest email); this function itself never raises for a
+    source's own failure.
 
-    Sources run as explicit tasks (not bare coroutines passed to gather) so
-    that if one fails, the still-running siblings can be cancelled and
-    awaited before the exception propagates -- otherwise they'd keep
-    scraping in the background after the caller's httpx.AsyncClient is
-    closed on the way out, and any calls they still made would never be
-    reflected in the call-stats summary already logged by then.
+    Sources still run as explicit tasks (not bare coroutines passed to
+    gather) so that a genuine external cancellation -- e.g. the caller
+    wrapping this in `asyncio.wait_for(..., timeout=...)` and that timeout
+    firing -- still cancels and awaits every still-running source cleanly,
+    rather than leaving them scraping in the background after the caller's
+    httpx.AsyncClient is closed on the way out.
     """
 
-    async def _run(source: JobSource) -> list[NormalizedJob]:
+    async def _run(source: JobSource) -> tuple[list[NormalizedJob], SourceFailure | None]:
         logger.info("Running source: %s", source.name)
         try:
-            return await source.fetch_jobs()
+            return await source.fetch_jobs(), None
         except Exception as exc:
-            raise DigestBuildError(f"source '{source.name}' failed: {exc}") from exc
+            logger.exception("Source '%s' failed; continuing with the other sources", source.name)
+            return [], SourceFailure(source=source.name, error=f"{type(exc).__name__}: {exc}")
 
     tasks = [asyncio.create_task(_run(source)) for source in sources]
     try:
@@ -91,7 +99,14 @@ async def collect_jobs(sources: list[JobSource]) -> list[NormalizedJob]:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         raise
-    return [job for jobs in results for job in jobs]
+
+    jobs: list[NormalizedJob] = []
+    failures: list[SourceFailure] = []
+    for source_jobs, failure in results:
+        jobs.extend(source_jobs)
+        if failure is not None:
+            failures.append(failure)
+    return jobs, failures
 
 
 def group_and_sort_by_country(jobs: list[NormalizedJob]) -> list[tuple[str, list[NormalizedJob]]]:
@@ -115,21 +130,44 @@ def digest_headline(job_count: int, *, posted_within_label: str) -> str:
     return f"{job_count} Visa-Sponsoring Jobs Posted in the Last {posted_within_label}"
 
 
-def render_digest_html(grouped: list[tuple[str, list[NormalizedJob]]], *, posted_within_label: str) -> str:
+def render_digest_html(
+    grouped: list[tuple[str, list[NormalizedJob]]],
+    *,
+    posted_within_label: str,
+    failures: list[SourceFailure] | None = None,
+) -> str:
     """Render the full grouped-and-sorted digest as a self-contained HTML email."""
     job_count = sum(len(jobs) for _, jobs in grouped)
     body_sections = "\n".join(_render_country_section(country, jobs) for country, jobs in grouped) or (
         '<p style="color:#666;">No visa-sponsoring postings found in this window.</p>'
     )
     headline = digest_headline(job_count, posted_within_label=posted_within_label)
+    failures_section = _render_failures_section(failures or [])
     return f"""\
 <html>
 <body style="font-family:-apple-system,Helvetica,Arial,sans-serif;color:#222;max-width:640px;margin:0 auto;padding:16px;">
 <h1 style="font-size:22px;border-bottom:2px solid #1a73e8;padding-bottom:8px;margin-bottom:8px;">{headline}</h1>
-{body_sections}
+{failures_section}{body_sections}
 </body>
 </html>
 """
+
+
+def _render_failures_section(failures: list[SourceFailure]) -> str:
+    # Deliberately terse for this audience (a mailing list, not a debug
+    # console): just which source(s) didn't complete, no URLs or raw
+    # exception text -- those go to the server logs and the API response
+    # instead (see SourceFailure.error / DigestRunResponse.source_failures).
+    if not failures:
+        return ""
+    source_names = ", ".join(html.escape(failure.source) for failure in failures)
+    return (
+        '<p style="margin:0 0 16px;padding:10px 14px;background:#fff4f4;'
+        'border:1px solid #e3a0a0;border-radius:6px;color:#a33;font-size:13px;">'
+        f"Note: the following source(s) did not complete this run and may be missing postings below: "
+        f"{source_names}."
+        "</p>\n"
+    )
 
 
 def _render_country_section(country: str, jobs: list[NormalizedJob]) -> str:

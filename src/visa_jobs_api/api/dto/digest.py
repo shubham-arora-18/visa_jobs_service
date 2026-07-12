@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from visa_jobs_api.sources.indeed.queries import DEFAULT_KEYWORDS as INDEED_DEFAULT_KEYWORDS
 from visa_jobs_api.sources.linkedin.queries import DEFAULT_KEYWORDS as LINKEDIN_DEFAULT_KEYWORDS
@@ -54,3 +54,4 @@ class DigestRunResponse(BaseModel):
     countries: int
     by_source: list[SourceCount]
     email_sent_to: list[str]
+    source_failures: list[str] = Field(default_factory=list)

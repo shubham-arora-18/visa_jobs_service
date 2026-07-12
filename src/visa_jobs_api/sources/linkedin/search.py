@@ -12,6 +12,11 @@ linkedin_visa_scraper/DECISIONS.md for the investigation that found this.
 Each query's own pages must be fetched in order (you can't know if page 2
 exists until you've seen page 1's result count), so bounded concurrency here
 is one task per query, not one per page.
+
+A page that fails to fetch after retries (shared.http.FetchError) stops
+that one query's pagination early, keeping whatever pages it already
+gathered, rather than failing the whole query -- and, in turn, the whole
+source or digest run -- over one bad page.
 """
 
 from __future__ import annotations
@@ -26,7 +31,7 @@ from bs4 import BeautifulSoup, Tag
 from visa_jobs_api.config import Settings
 from visa_jobs_api.shared.call_stats import CallStats
 from visa_jobs_api.shared.concurrency import gather_limited
-from visa_jobs_api.shared.http import fetch_html
+from visa_jobs_api.shared.http import FetchError, fetch_html
 from visa_jobs_api.sources.linkedin.models import JobCard, SearchQuery
 
 logger = logging.getLogger(__name__)
@@ -85,13 +90,25 @@ async def _fetch_query_job_cards(
     cards: list[JobCard] = []
     for page in range(settings.linkedin_max_pages_per_query):
         url = _build_search_url(query, start=page_size * page, timespan_seconds=timespan_seconds)
-        html = await fetch_html(
-            client,
-            url,
-            via_decodo=True,
-            decodo_username=settings.decodo_username,
-            decodo_password=settings.decodo_password,
-        )
+        try:
+            html = await fetch_html(
+                client,
+                url,
+                via_decodo=True,
+                decodo_username=settings.decodo_username,
+                decodo_password=settings.decodo_password,
+            )
+        except FetchError as exc:
+            logger.error(
+                "LinkedIn search %r/%r: page %d failed to fetch -- keeping the %d card(s) already "
+                "gathered for this query: %s",
+                query.keywords,
+                query.location,
+                page,
+                len(cards),
+                exc,
+            )
+            break
         stats.record_linkedin_search_call(query.location)
         page_cards = _parse_job_cards(html, query_country=query.location)
         cards.extend(page_cards)

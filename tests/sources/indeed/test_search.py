@@ -5,6 +5,7 @@ import pytest
 
 from visa_jobs_api.config import Settings
 from visa_jobs_api.shared.call_stats import CallStats
+from visa_jobs_api.shared.http import FetchError
 from visa_jobs_api.sources.indeed.models import SearchQuery
 from visa_jobs_api.sources.indeed.search import _build_search_url, _fromage_for_hours, fetch_all_job_cards
 
@@ -181,3 +182,56 @@ async def test_fetch_all_job_cards_records_one_search_call_per_page_fetched(monk
         )
 
     assert stats.indeed_search_calls == {"United States": 2}
+
+
+async def test_fetch_all_job_cards_stops_a_querys_pagination_on_fetch_failure_but_keeps_earlier_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A page that never loads after retries must not cost the whole query
+    # (let alone the whole source) the cards its earlier pages already found.
+    first_page = _page_html(
+        [_card_html("1", "Job 1", "Acme", "New York, NY"), _card_html("2", "Job 2", "Acme", "New York, NY")]
+    )
+    call_count = 0
+
+    async def fake_fetch_html(client, url, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return first_page
+        raise FetchError(f"failed to fetch {url!r} after retries")
+
+    monkeypatch.setattr("visa_jobs_api.sources.indeed.search.fetch_html", fake_fetch_html)
+
+    settings = _settings()
+    async with httpx.AsyncClient() as client:
+        cards = await fetch_all_job_cards(
+            client, [SearchQuery(keywords="Python", country="United States")], settings=settings, posted_within_hours=24
+        )
+
+    assert len(cards) == 2
+
+
+async def test_fetch_all_job_cards_continues_other_queries_when_one_querys_page_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_fetch_html(client, url, **kwargs):
+        if url.startswith("https://www.indeed.com/"):  # United States' domain -- see country_domains.py
+            raise FetchError("boom")
+        return _page_html([_card_html("1", "Job 1", "Acme", "Dublin")])
+
+    monkeypatch.setattr("visa_jobs_api.sources.indeed.search.fetch_html", fake_fetch_html)
+
+    settings = _settings(indeed_max_pages_per_query=1)
+    async with httpx.AsyncClient() as client:
+        cards = await fetch_all_job_cards(
+            client,
+            [
+                SearchQuery(keywords="Python", country="United States"),
+                SearchQuery(keywords="Python", country="Ireland"),
+            ],
+            settings=settings,
+            posted_within_hours=24,
+        )
+
+    assert len(cards) == 1

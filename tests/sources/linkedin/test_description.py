@@ -7,6 +7,7 @@ import pytest
 
 from visa_jobs_api.config import Settings
 from visa_jobs_api.shared.call_stats import CallStats
+from visa_jobs_api.shared.http import FetchError
 from visa_jobs_api.sources.linkedin.description import _extract_description_text, fetch_all_descriptions
 from visa_jobs_api.sources.linkedin.models import JobCard
 
@@ -89,3 +90,23 @@ async def test_fetch_all_descriptions_records_one_call_per_card_by_query_country
         await fetch_all_descriptions(client, cards, settings=_settings(), stats=stats)
 
     assert stats.linkedin_description_calls == {"Ireland": 2, "Germany": 1}
+
+
+async def test_fetch_all_descriptions_skips_a_card_whose_fetch_fails_but_keeps_the_rest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A single job whose description page never loads after retries must
+    # not cost the whole source every other job it already found.
+    async def fake_fetch_html(client, url, **kwargs):
+        if "1" in url:
+            raise FetchError(f"failed to fetch {url!r} after retries")
+        return '<div class="description__text description__text--rich">We offer visa sponsorship.</div>'
+
+    monkeypatch.setattr("visa_jobs_api.sources.linkedin.description.fetch_html", fake_fetch_html)
+
+    cards = [_card("https://www.linkedin.com/jobs/view/1/"), _card("https://www.linkedin.com/jobs/view/2/")]
+    async with httpx.AsyncClient() as client:
+        candidates = await fetch_all_descriptions(client, cards, settings=_settings())
+
+    assert len(candidates) == 1
+    assert candidates[0].card.url == "https://www.linkedin.com/jobs/view/2/"
