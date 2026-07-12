@@ -30,24 +30,15 @@ jobs:
           DECODO_PASSWORD: ${{ secrets.DECODO_PASSWORD }}
           BRIGHTDATA_API_KEY: ${{ secrets.BRIGHTDATA_API_KEY }}
           BRIGHTDATA_ZONE: ${{ secrets.BRIGHTDATA_ZONE }}
-          # Each `|| <n>` fallback mirrors config.py's own Python-side
-          # default exactly. A GitHub Actions repo Variable that was never
-          # created resolves to an empty string, not an absent env var --
-          # pydantic-settings treats those differently (an empty string
-          # fails int-parsing instead of falling back to the field
-          # default), so without these fallbacks a missing repo Variable
-          # crashes the whole scheduled run. This exact failure mode is
-          # what happened when the Indeed vars below were never added
-          # after the Indeed source was merged.
-          HN_LLM_CONCURRENCY: ${{ vars.HN_LLM_CONCURRENCY || 5 }}
-          LINKEDIN_SEARCH_CONCURRENCY: ${{ vars.LINKEDIN_SEARCH_CONCURRENCY || 10 }}
-          LINKEDIN_DESCRIPTION_CONCURRENCY: ${{ vars.LINKEDIN_DESCRIPTION_CONCURRENCY || 10 }}
-          LINKEDIN_LLM_CONCURRENCY: ${{ vars.LINKEDIN_LLM_CONCURRENCY || 16 }}
-          INDEED_SEARCH_CONCURRENCY: ${{ vars.INDEED_SEARCH_CONCURRENCY || 4 }}
-          INDEED_DESCRIPTION_CONCURRENCY: ${{ vars.INDEED_DESCRIPTION_CONCURRENCY || 4 }}
-          INDEED_LLM_CONCURRENCY: ${{ vars.INDEED_LLM_CONCURRENCY || 16 }}
-          LINKEDIN_POSTS_PER_PAGE: ${{ vars.LINKEDIN_POSTS_PER_PAGE || 10 }}
-          LINKEDIN_MAX_PAGES_PER_QUERY: ${{ vars.LINKEDIN_MAX_PAGES_PER_QUERY || 3 }}
-          INDEED_POSTS_PER_PAGE: ${{ vars.INDEED_POSTS_PER_PAGE || 15 }}
-          INDEED_MAX_PAGES_PER_QUERY: ${{ vars.INDEED_MAX_PAGES_PER_QUERY || 4 }}
+          HN_LLM_CONCURRENCY: ${{ vars.HN_LLM_CONCURRENCY }}
+          LINKEDIN_SEARCH_CONCURRENCY: ${{ vars.LINKEDIN_SEARCH_CONCURRENCY }}
+          LINKEDIN_DESCRIPTION_CONCURRENCY: ${{ vars.LINKEDIN_DESCRIPTION_CONCURRENCY }}
+          LINKEDIN_LLM_CONCURRENCY: ${{ vars.LINKEDIN_LLM_CONCURRENCY }}
+          INDEED_SEARCH_CONCURRENCY: ${{ vars.INDEED_SEARCH_CONCURRENCY }}
+          INDEED_DESCRIPTION_CONCURRENCY: ${{ vars.INDEED_DESCRIPTION_CONCURRENCY }}
+          INDEED_LLM_CONCURRENCY: ${{ vars.INDEED_LLM_CONCURRENCY }}
+          LINKEDIN_POSTS_PER_PAGE: ${{ vars.LINKEDIN_POSTS_PER_PAGE }}
+          LINKEDIN_MAX_PAGES_PER_QUERY: ${{ vars.LINKEDIN_MAX_PAGES_PER_QUERY }}
+          INDEED_POSTS_PER_PAGE: ${{ vars.INDEED_POSTS_PER_PAGE }}
+          INDEED_MAX_PAGES_PER_QUERY: ${{ vars.INDEED_MAX_PAGES_PER_QUERY }}
         run: visa-jobs-digest
