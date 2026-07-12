@@ -1,22 +1,25 @@
 """Fetches and parses Indeed's job-search endpoint via Bright Data.
 
-Pagination mirrors LinkedIn's approach (sources/linkedin/search.py): fetch
-pages in order and stop as soon as one comes back with fewer than a full
-page of results, capped at `indeed_max_pages_per_query` -- Indeed has no
-total-result-count field either.
+Unlike LinkedIn (sources/linkedin/search.py), this always fetches every
+page up to `indeed_max_pages_per_query` for every query -- it does NOT stop
+early on a short/empty page, and does NOT stop early on a page that fails
+to fetch (shared.http.FetchError, including Bright Data itself reporting a
+failure via its x-brd-* headers -- see shared/http.py). Both of those
+"stop early" heuristics were found empirically to be unreliable for Indeed
+specifically: a `start=N` offset returning 0 or erroring does not reliably
+mean no more results exist -- a later offset in the very same query was
+repeatedly observed to return a full page of entirely new, real postings
+right after an earlier offset came back empty (see
+indeed_scraper_experiment/DECISIONS.md for the live investigation this is
+based on). This is Indeed-only; LinkedIn's pagination keeps its original
+stop-early behavior, since LinkedIn's `seeMoreJobPostings` endpoint was not
+found to have this problem.
 
-A 0-card page is retried once before being trusted: a live re-fetch of a
-country with identical parameters was found to return real cards moments
-after an earlier attempt returned 0 for it (see
-indeed_scraper_experiment/DECISIONS.md) -- the same "page loaded but came
-back empty/blocked" failure mode already documented for LinkedIn (silently
-treating that as "no jobs found" previously made an entire real digest run
-look like zero sponsorship offers).
-
-A page that still fails to fetch after those retries (shared.http.FetchError)
-stops that one query's pagination early, keeping whatever pages it already
-gathered, rather than failing the whole query -- and, in turn, the whole
-source or digest run -- over one bad page.
+A 0-card page is still retried once within a single offset before being
+trusted (see _EMPTY_PAGE_RETRY_ATTEMPTS below) -- that's a different,
+narrower mechanism (is *this one* response trustworthy) from the pagination
+stop condition this docstring is about (whether to keep requesting further
+offsets at all).
 """
 
 from __future__ import annotations
@@ -38,14 +41,6 @@ logger = logging.getLogger(__name__)
 
 _SEARCH_URL_TEMPLATE = "https://{domain}/jobs"
 
-# Job Type = Full-time + Permanent, Experience level = Senior -- selected
-# directly in Indeed's own search-filter UI and provided as a requirement,
-# not something this codebase chose on its own. Decoded, this is
-# `0kf:attr(5QWDV|CF3CP,OR)explvl(SENIOR_LEVEL);` -- `attr(5QWDV|CF3CP,OR)`
-# matches Job Type "Permanent" OR "Full-time", `explvl(SENIOR_LEVEL)` is
-# the Experience Level filter.
-_SC_FILTER = "0kf%3Aattr%285QWDV%7CCF3CP%252COR%29explvl%28SENIOR_LEVEL%29%3B"
-
 # Indeed's date-posted filter (`fromage`, in days) only accepts the values
 # its own UI exposes (1/3/7/14) -- there's no hour-level control the way
 # LinkedIn's f_TPR offers, so an hour count maps to the closest supported
@@ -63,10 +58,13 @@ def _fromage_for_hours(posted_within_hours: int) -> int:
     return _FROMAGE_OPTIONS[-1]
 
 
-def _build_search_url(domain: str, *, keywords: str, start: int, posted_within_hours: int) -> str:
+def _build_search_url(domain: str, *, keywords: str, start: int, posted_within_hours: int, vjk: str = "") -> str:
     fromage = _fromage_for_hours(posted_within_hours)
     base_url = _SEARCH_URL_TEMPLATE.format(domain=domain)
-    return f"{base_url}?q={quote(keywords)}&l=&fromage={fromage}&sc={_SC_FILTER}&start={start}"
+    url = f"{base_url}?q={quote(keywords)}&l=&fromage={fromage}&start={start}"
+    if vjk:
+        url += f"&vjk={vjk}"
+    return url
 
 
 async def _fetch_one_page(
@@ -110,26 +108,31 @@ async def _fetch_query_job_cards(
     cards: list[JobCard] = []
     for page in range(settings.indeed_max_pages_per_query):
         url = _build_search_url(
-            domain, keywords=query.keywords, start=page_size * page, posted_within_hours=posted_within_hours
+            domain,
+            keywords=query.keywords,
+            start=page_size * page,
+            posted_within_hours=posted_within_hours,
+            vjk=settings.indeed_vjk,
         )
         try:
             page_cards = await _fetch_one_page(
                 client, url, domain=domain, geo=geo, query_country=query.country, settings=settings, stats=stats
             )
         except FetchError as exc:
+            # Deliberately does not stop this query's pagination -- see
+            # module docstring for why a failed offset (including Bright
+            # Data itself reporting a failure) doesn't reliably mean later
+            # offsets have nothing either.
             logger.error(
-                "Indeed search %r/%r: page %d failed to fetch -- keeping the %d card(s) already "
-                "gathered for this query: %s",
+                "Indeed search %r/%r: page %d failed to fetch -- skipping this page and continuing "
+                "to the next offset: %s",
                 query.keywords,
                 query.country,
                 page,
-                len(cards),
                 exc,
             )
-            break
+            continue
         cards.extend(page_cards)
-        if len(page_cards) < page_size:
-            break
     logger.info("Indeed search %r/%r: %d job cards", query.keywords, query.country, len(cards))
     return cards
 

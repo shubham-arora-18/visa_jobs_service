@@ -59,14 +59,25 @@ class Settings(BaseSettings):
     linkedin_max_pages_per_query: int = Field(default=3, gt=0)
 
     # Indeed search pagination.
-    indeed_posts_per_page: int = Field(default=15, gt=0)
+    indeed_posts_per_page: int = Field(default=10, gt=0)
     indeed_max_pages_per_query: int = Field(default=4, gt=0)
+
+    # Optional `vjk` (viewed-job-key) query param appended to every Indeed
+    # search URL when set -- empty by default (omitted from the URL
+    # entirely), since it pins to one specific job posting captured from a
+    # real browser session and isn't something this codebase generates on
+    # its own. Indeed-only; LinkedIn has no equivalent parameter.
+    indeed_vjk: str = Field(default="")
 
     # Upper bound on collect_jobs() across all sources -- with per-country
     # retries/pagination and a 60s-per-request proxy timeout on both Bright
     # Data and Decodo, an unbounded run can otherwise stretch into many
-    # minutes with nothing timing it out from inside the app.
-    digest_run_timeout_seconds: int = Field(default=600, gt=0)
+    # minutes with nothing timing it out from inside the app. Doubled from
+    # an original 600s: removing Indeed's sc= (Job Type/Experience Level)
+    # filter lets more candidates through per country (verified live,
+    # Indeed alone: 97 raw cards -> 23 after filter, up from ~7-15 before),
+    # needing more time for description-fetch + LLM confirmation.
+    digest_run_timeout_seconds: int = Field(default=1200, gt=0)
 
     def recipient_list(self) -> list[str]:
         recipients = [email.strip() for email in self.digest_recipients.split(",") if email.strip()]
