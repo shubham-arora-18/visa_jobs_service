@@ -107,6 +107,26 @@ async def _get_via_brightdata(client: httpx.AsyncClient, url: str, *, api_key: s
         timeout=BRIGHTDATA_FETCH_TIMEOUT_SECONDS,
     )
     response.raise_for_status()
+    # Bright Data itself can respond 200 while its own x-brd-* headers say
+    # the fetch failed (IP blacklisted, an authwall/login page was detected
+    # instead of real content, etc.) -- found live while investigating
+    # Indeed pagination (see indeed_scraper_experiment/DECISIONS.md). Without
+    # this check, that failure is silently treated as "page fetched
+    # successfully" with garbage/empty content -- exactly the "must never be
+    # treated as page has no content" failure mode this module's docstring
+    # already warns about for other failure paths. Re-raising with the real
+    # x-brd-status-code lets _is_retryable classify it the same way any
+    # other upstream failure is (e.g. 502/authwall retries, 401/blacklist
+    # doesn't -- retrying an IP block immediately can't help).
+    brd_error = response.headers.get("x-brd-error")
+    if brd_error:
+        brd_status_header = response.headers.get("x-brd-status-code")
+        upstream_status = int(brd_status_header) if brd_status_header and brd_status_header.isdigit() else 502
+        raise httpx.HTTPStatusError(
+            f"Bright Data reported a failure for {url!r}: {brd_error}",
+            request=response.request,
+            response=httpx.Response(upstream_status, request=response.request),
+        )
     return response.text
 
 

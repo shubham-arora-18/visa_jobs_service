@@ -61,19 +61,39 @@ def test_fromage_for_hours_rounds_up_to_the_next_supported_option() -> None:
     assert _fromage_for_hours(24 * 2) == 3
 
 
-def test_build_search_url_includes_keywords_fromage_and_job_type_experience_filter() -> None:
+def test_build_search_url_includes_keywords_fromage_and_start() -> None:
     url = _build_search_url("www.indeed.com", keywords='(Python) AND ("sponsor")', start=15, posted_within_hours=24)
 
     assert url.startswith("https://www.indeed.com/jobs?q=")
     assert "fromage=1" in url
     assert "start=15" in url
-    # The Job Type (Full-time/Permanent) + Experience Level (Senior) filter
-    # the user selected directly in Indeed's own UI and provided as a
-    # requirement -- see search.py's _SC_FILTER constant.
-    assert "sc=0kf" in url
+    # The Job Type/Experience Level sc= filter was removed -- broader net,
+    # relying on the deterministic title-filter + LLM confirmation instead.
+    assert "sc=" not in url
 
 
-async def test_fetch_all_job_cards_stops_after_a_partial_page(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_build_search_url_omits_vjk_when_not_set() -> None:
+    url = _build_search_url("www.indeed.com", keywords="Python", start=0, posted_within_hours=24)
+
+    assert "vjk" not in url
+
+
+def test_build_search_url_appends_vjk_when_set() -> None:
+    url = _build_search_url(
+        "www.indeed.com", keywords="Python", start=0, posted_within_hours=24, vjk="abc123"
+    )
+
+    assert url.endswith("&vjk=abc123")
+
+
+async def test_fetch_all_job_cards_fetches_every_configured_page_even_after_a_partial_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Unlike LinkedIn, Indeed does NOT stop early on a partial/short page --
+    # a later offset was repeatedly observed to return a full page of
+    # entirely new real postings right after an earlier offset came back
+    # short/empty (see search.py's module docstring). indeed_max_pages_per_query
+    # is 3 by default in _settings(), so all 3 pages must be fetched.
     pages = [
         _page_html(
             [
@@ -81,7 +101,8 @@ async def test_fetch_all_job_cards_stops_after_a_partial_page(monkeypatch: pytes
                 _card_html("2", "Job 2", "Acme", "New York, NY"),
             ]
         ),
-        _page_html([_card_html("3", "Job 3", "Acme", "New York, NY")]),
+        _page_html([_card_html("3", "Job 3", "Acme", "New York, NY")]),  # partial page -- no longer stops anything
+        _page_html([_card_html("4", "Job 4", "Acme", "New York, NY")]),
     ]
     call_count = 0
 
@@ -99,8 +120,8 @@ async def test_fetch_all_job_cards_stops_after_a_partial_page(monkeypatch: pytes
             client, [SearchQuery(keywords="Python", country="United States")], settings=settings, posted_within_hours=24
         )
 
-    assert len(cards) == 3
-    assert call_count == 2  # never fetched the (nonexistent) page 2
+    assert len(cards) == 4
+    assert call_count == 3  # all 3 configured pages fetched, despite page 1 being partial
 
 
 async def test_fetch_all_job_cards_retries_a_suspicious_empty_page_before_trusting_it(
@@ -151,6 +172,9 @@ async def test_fetch_all_job_cards_accepts_zero_after_exhausting_retries(monkeyp
 
 
 async def test_fetch_all_job_cards_records_one_search_call_per_page_fetched(monkeypatch: pytest.MonkeyPatch) -> None:
+    # indeed_max_pages_per_query is 3 by default in _settings() -- and every
+    # configured page is now always fetched (see the "fetches every
+    # configured page" test above), so 3 pages means 3 recorded calls.
     pages = [
         _page_html(
             [
@@ -159,6 +183,7 @@ async def test_fetch_all_job_cards_records_one_search_call_per_page_fetched(monk
             ]
         ),
         _page_html([_card_html("3", "Job 3", "Acme", "New York, NY")]),
+        _page_html([_card_html("4", "Job 4", "Acme", "New York, NY")]),
     ]
     call_count = 0
 
@@ -181,14 +206,18 @@ async def test_fetch_all_job_cards_records_one_search_call_per_page_fetched(monk
             stats=stats,
         )
 
-    assert stats.indeed_search_calls == {"United States": 2}
+    assert stats.indeed_search_calls == {"United States": 3}
 
 
-async def test_fetch_all_job_cards_stops_a_querys_pagination_on_fetch_failure_but_keeps_earlier_pages(
+async def test_fetch_all_job_cards_keeps_going_past_a_page_that_fails_to_fetch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # A page that never loads after retries must not cost the whole query
-    # (let alone the whole source) the cards its earlier pages already found.
+    # (let alone the whole source) the cards its earlier pages already
+    # found -- and, unlike the old behavior, must not stop the remaining
+    # configured pages from being tried either (see search.py's module
+    # docstring for why). indeed_max_pages_per_query is 3 by default, so
+    # all 3 pages are attempted even though pages 2 and 3 both fail.
     first_page = _page_html(
         [_card_html("1", "Job 1", "Acme", "New York, NY"), _card_html("2", "Job 2", "Acme", "New York, NY")]
     )
@@ -210,6 +239,7 @@ async def test_fetch_all_job_cards_stops_a_querys_pagination_on_fetch_failure_bu
         )
 
     assert len(cards) == 2
+    assert call_count == 3  # all 3 configured pages were attempted, not just the first
 
 
 async def test_fetch_all_job_cards_continues_other_queries_when_one_querys_page_fails(
