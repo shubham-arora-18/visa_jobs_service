@@ -3,8 +3,8 @@
 Calls the exact same service-layer run_digest used by the FastAPI
 POST /digest/run endpoint, so the CLI and the API are always in sync --
 there's exactly one implementation of "what a run does". Defaults match
-DigestRunRequest's own defaults (default LinkedIn keywords, a 1-day
-window), since a daily scheduled digest is the "day" use case.
+DigestRunRequest's own defaults (default LinkedIn/Indeed keywords, a
+1-day window), since a daily scheduled digest is the "day" use case.
 
 Any failure is reported via a failure email inside run_digest itself
 (see api.services.digest_service), then re-raised here so the process
@@ -28,6 +28,7 @@ async def _main() -> None:
     await run_digest(
         settings=settings,
         linkedin_keywords=request.linkedin_keywords,
+        indeed_keywords=request.indeed_keywords,
         posted_within_hours=request.posted_within_hours(),
         posted_within_label=request.posted_within_label(),
     )

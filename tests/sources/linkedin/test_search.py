@@ -6,7 +6,8 @@ import httpx
 import pytest
 
 from visa_jobs_api.config import Settings
-from visa_jobs_api.sources.linkedin.call_stats import CallStats
+from visa_jobs_api.shared.call_stats import CallStats
+from visa_jobs_api.shared.http import FetchError
 from visa_jobs_api.sources.linkedin.models import SearchQuery
 from visa_jobs_api.sources.linkedin.search import _parse_job_cards, fetch_all_job_cards
 
@@ -38,6 +39,8 @@ def _settings(**overrides: object) -> Settings:
         digest_recipients="me@example.com",
         decodo_username="decodo-user",
         decodo_password="decodo-pass",
+        brightdata_api_key="bd-key",
+        brightdata_zone="bd-zone",
         linkedin_posts_per_page=2,
         linkedin_max_pages_per_query=3,
         linkedin_search_concurrency=5,
@@ -134,4 +137,60 @@ async def test_fetch_all_job_cards_records_one_search_call_per_page_fetched(monk
 
     # 2 pages fetched for Ireland (full page then partial page) -> 2 recorded
     # search calls, keyed by the query's own country.
-    assert stats.search_calls == {"Ireland": 2}
+    assert stats.linkedin_search_calls == {"Ireland": 2}
+
+
+async def test_fetch_all_job_cards_stops_a_querys_pagination_on_fetch_failure_but_keeps_earlier_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A page that never loads after retries must not cost the whole query
+    # (let alone the whole source) the cards its earlier pages already found.
+    first_page = _page_html(
+        [
+            _card_html("1", "Job 1", "Acme", "Dublin, Ireland", "2026-07-04"),
+            _card_html("2", "Job 2", "Acme", "Dublin, Ireland", "2026-07-04"),
+        ]
+    )
+    call_count = 0
+
+    async def fake_fetch_html(client, url, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return first_page
+        raise FetchError(f"failed to fetch {url!r} after retries")
+
+    monkeypatch.setattr("visa_jobs_api.sources.linkedin.search.fetch_html", fake_fetch_html)
+
+    settings = _settings()
+    async with httpx.AsyncClient() as client:
+        cards = await fetch_all_job_cards(
+            client, [SearchQuery(keywords="Python", location="Ireland")], settings=settings, posted_within_hours=24
+        )
+
+    assert len(cards) == 2
+
+
+async def test_fetch_all_job_cards_continues_other_queries_when_one_querys_page_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_fetch_html(client, url, **kwargs):
+        if "location=Ireland" in url:
+            raise FetchError("boom")
+        return _page_html([_card_html("1", "Job 1", "Acme", "New York, NY", "2026-07-04")])
+
+    monkeypatch.setattr("visa_jobs_api.sources.linkedin.search.fetch_html", fake_fetch_html)
+
+    settings = _settings(linkedin_max_pages_per_query=1)
+    async with httpx.AsyncClient() as client:
+        cards = await fetch_all_job_cards(
+            client,
+            [
+                SearchQuery(keywords="Python", location="Ireland"),
+                SearchQuery(keywords="Python", location="United States"),
+            ],
+            settings=settings,
+            posted_within_hours=24,
+        )
+
+    assert len(cards) == 1

@@ -37,6 +37,7 @@ async def trigger_digest_run(
         return await run_digest(
             settings=settings,
             linkedin_keywords=request.linkedin_keywords,
+            indeed_keywords=request.indeed_keywords,
             posted_within_hours=request.posted_within_hours(),
             posted_within_label=request.posted_within_label(),
         )
