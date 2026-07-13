@@ -171,6 +171,36 @@ async def test_fetch_all_job_cards_accepts_zero_after_exhausting_retries(monkeyp
     assert cards == []
 
 
+async def test_fetch_all_job_cards_stops_pagination_after_a_successful_but_empty_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Unlike a failed fetch (which doesn't stop pagination -- see the
+    # "keeps going past a page that fails to fetch" test), a *successful*
+    # fetch with 0 cards is trustworthy (it's already survived
+    # _fetch_one_page's own retry-once-if-empty check) and does stop
+    # pagination -- no further offsets should be requested at all.
+    call_count = 0
+
+    async def fake_fetch_html(client, url, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        # First offset: both retry attempts return empty -> confirmed empty.
+        return "<html>genuinely no results</html>"
+
+    monkeypatch.setattr("visa_jobs_api.sources.indeed.search.fetch_html", fake_fetch_html)
+
+    settings = _settings(indeed_max_pages_per_query=3)
+    async with httpx.AsyncClient() as client:
+        cards = await fetch_all_job_cards(
+            client, [SearchQuery(keywords="Python", country="United States")], settings=settings, posted_within_hours=24
+        )
+
+    assert cards == []
+    # 2 calls total: both retry attempts for page 0 only -- pages 1 and 2
+    # were never requested at all.
+    assert call_count == 2
+
+
 async def test_fetch_all_job_cards_records_one_search_call_per_page_fetched(monkeypatch: pytest.MonkeyPatch) -> None:
     # indeed_max_pages_per_query is 3 by default in _settings() -- and every
     # configured page is now always fetched (see the "fetches every
