@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from visa_jobs_api.sources.linkedin.models import SearchQuery
 
-DEFAULT_KEYWORDS = "(Python OR Backend OR Java) AND (sponsor OR sponsorship OR "work authorization")"
+DEFAULT_KEYWORDS = '(Python OR Backend OR Java) AND (sponsor OR sponsorship OR "work authorization")'
 
 _COUNTRIES = [
     "United States",
