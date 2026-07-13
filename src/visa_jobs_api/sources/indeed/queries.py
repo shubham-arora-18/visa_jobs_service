@@ -20,7 +20,7 @@ from __future__ import annotations
 from visa_jobs_api.sources.indeed.country_domains import COUNTRY_DOMAINS
 from visa_jobs_api.sources.indeed.models import SearchQuery
 
-DEFAULT_KEYWORDS = '("Python" OR "Backend" OR "Java" OR "software") AND ("sponsor" OR "sponsorship")'
+DEFAULT_KEYWORDS = '("Python" OR "Backend" OR "Java" OR "software") AND ("work authorization" OR "sponsor" OR "sponsorship")'
 
 
 def build_search_queries(keywords: str = DEFAULT_KEYWORDS) -> list[SearchQuery]:
