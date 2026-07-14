@@ -113,7 +113,7 @@ async def _fetch_page_with_retry(
 async def _fetch_query_job_cards(
     query: SearchQuery, *, settings: Settings, posted_within_hours: int, stats: CallStats
 ) -> list[JobCard]:
-    domain, _geo = COUNTRY_DOMAINS[query.country]
+    domain = COUNTRY_DOMAINS[query.country]
     page_size = settings.indeed_posts_per_page
     cards: list[JobCard] = []
 

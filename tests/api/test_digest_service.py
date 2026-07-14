@@ -21,8 +21,6 @@ def _settings(**overrides: object) -> Settings:
         digest_recipients="me@example.com,you@example.com",
         decodo_username="decodo-user",
         decodo_password="decodo-pass",
-        brightdata_api_key="bd-key",
-        brightdata_zone="bd-zone",
     )
     defaults.update(overrides)
     return Settings(**defaults)
@@ -133,7 +131,7 @@ async def test_run_digest_passes_a_shared_call_stats_instance_to_build_sources(
 async def test_run_digest_logs_the_call_stats_summary_even_on_a_genuine_systemic_error(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    # The combined per-country Bright Data/Decodo call summary is logged
+    # The combined per-country Selenium/Decodo call summary is logged
     # from a finally block specifically so it's still visible when
     # diagnosing a failed run, not only on success.
     monkeypatch.setattr("visa_jobs_api.api.services.digest_service.build_sources", lambda **kwargs: [])
@@ -146,4 +144,7 @@ async def test_run_digest_logs_the_call_stats_summary_even_on_a_genuine_systemic
     with caplog.at_level(logging.INFO), pytest.raises(RuntimeError):
         await run_digest(settings=_settings())
 
-    assert any("Bright Data (Indeed) / Decodo (LinkedIn)" in record.getMessage() for record in caplog.records)
+    assert any(
+        "Selenium (Indeed search) / Decodo (Indeed details, LinkedIn)" in record.getMessage()
+        for record in caplog.records
+    )

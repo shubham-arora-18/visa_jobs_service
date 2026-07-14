@@ -18,8 +18,6 @@ def _settings(**overrides: object) -> Settings:
         digest_recipients="me@example.com",
         decodo_username="decodo-user",
         decodo_password="decodo-pass",
-        brightdata_api_key="bd-key",
-        brightdata_zone="bd-zone",
         indeed_description_concurrency=5,
     )
     defaults.update(overrides)

@@ -1,14 +1,17 @@
 """Per-country, per-provider call counters for the whole digest run.
 
 One instance is created per `run_digest()` call and threaded explicitly
-through both the LinkedIn (Decodo) and Indeed (Bright Data) sources --
-not kept as module-level global state, so counts from one digest run
-never leak into another (concurrent API requests, repeated test runs).
+through both the LinkedIn and Indeed sources -- not kept as module-level
+global state, so counts from one digest run never leak into another
+(concurrent API requests, repeated test runs). Indeed's search calls go
+through Selenium/headless Chrome (see sources/indeed/selenium_client.py);
+every other call type (Indeed description, LinkedIn search + description)
+goes through Decodo.
 
 Deliberately scoped to exactly the four call types requested: search-page
-and description-page fetches for each of the two proxy-bound sources. LLM
-confirmation calls go to Hugging Face, not Bright Data/Decodo, so they are
-out of scope for this tracker.
+and description-page fetches for each source. LLM confirmation calls go
+to Hugging Face, not Selenium/Decodo, so they are out of scope for this
+tracker.
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ from collections import defaultdict
 
 
 class CallStats:
-    """Counts Bright Data (Indeed) and Decodo (LinkedIn) calls per query country."""
+    """Counts Selenium (Indeed search) and Decodo (everything else) calls per query country."""
 
     def __init__(self) -> None:
         self.indeed_search_calls: dict[str, int] = defaultdict(int)
@@ -45,11 +48,11 @@ class CallStats:
             | set(self.linkedin_search_calls)
             | set(self.linkedin_description_calls)
         )
-        log.info("Bright Data (Indeed) / Decodo (LinkedIn) API calls by country:")
+        log.info("Selenium (Indeed search) / Decodo (Indeed details, LinkedIn) API calls by country:")
         for country in countries:
             log.info(
-                "%s: Bright Data API calls for Indeed job card: %d  "
-                "Bright Data API calls for Indeed job details: %d  "
+                "%s: Selenium calls for Indeed job card: %d  "
+                "Decodo API calls for Indeed job details: %d  "
                 "Decodo API calls for LinkedIn job card: %d  "
                 "Decodo API calls for LinkedIn job details: %d",
                 country,

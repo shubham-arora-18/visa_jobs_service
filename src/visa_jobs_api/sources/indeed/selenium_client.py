@@ -1,23 +1,24 @@
 """Fetches an Indeed search-results page through a real, headless Chrome browser.
 
-Replaces Bright Data for Indeed's *search* pages (description-page fetches
-still go through Bright Data -- see sources/indeed/description.py). Two
-things Bright Data's raw-HTTP fetch structurally cannot do drove this
-switch, both confirmed live (see indeed_scraper_experiment/DECISIONS.md):
+Used for Indeed's *search* pages specifically (description-page fetches go
+through Decodo instead -- see sources/indeed/description.py; both used to
+go through Bright Data, since fully removed). One thing a raw-HTTP/proxy
+fetch structurally cannot do drove this to Selenium instead of Decodo for
+search specifically, confirmed live (see indeed_scraper_experiment/DECISIONS.md):
 
 - Indeed attaches a `vjk` (viewed-job-key) query param to the address bar
   via client-side JS after a search page loads -- it never appears in the
-  server-rendered HTML a raw HTTP/proxy fetch returns, only in a real
-  browser's post-JS URL. Search.py needs this per-query vjk to build every
-  subsequent page's URL.
+  server-rendered HTML a raw HTTP/proxy fetch returns (confirmed for both
+  Bright Data and Decodo), only in a real browser's post-JS URL, since a
+  scrape API has no equivalent to a browser's navigable address bar.
+  Search.py needs this per-query vjk to build every subsequent page's URL.
 - A real browser, hitting Indeed directly with no proxy at all, was not
   blocked in any of dozens of live test requests -- unlike a raw direct
-  fetch (client-side Cloudflare bot-detection, HTTP 403) or Bright Data
-  (frequent IP-blacklist/authwall failures under sustained use, see
-  shared/http.py's x-brd-error handling). Whether this holds under
-  GitHub Actions' runner IPs specifically (vs. the residential/office IP
-  this was validated from) is untested -- worth watching the scheduled
-  run's logs for a regression back to blocked/empty pages.
+  fetch (client-side Cloudflare bot-detection, HTTP 403). Whether this
+  holds under GitHub Actions' runner IPs specifically (vs. the
+  residential/office IP this was validated from) is untested -- worth
+  watching the scheduled run's logs for a regression back to
+  blocked/empty pages.
 
 Selenium's WebDriver calls are all synchronous/blocking; fetch_html_via_selenium
 wraps them in asyncio.to_thread so a slow page load doesn't stall the event

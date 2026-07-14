@@ -39,8 +39,6 @@ def _settings(**overrides: object) -> Settings:
         digest_recipients="me@example.com",
         decodo_username="decodo-user",
         decodo_password="decodo-pass",
-        brightdata_api_key="bd-key",
-        brightdata_zone="bd-zone",
         linkedin_posts_per_page=2,
         linkedin_max_pages_per_query=3,
         linkedin_search_concurrency=5,
