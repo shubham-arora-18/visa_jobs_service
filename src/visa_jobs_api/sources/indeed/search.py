@@ -1,25 +1,29 @@
 """Fetches and parses Indeed's job-search endpoint via Bright Data.
 
-Unlike LinkedIn (sources/linkedin/search.py), this always fetches every
-page up to `indeed_max_pages_per_query` for every query -- it does NOT stop
-early on a short/empty page, and does NOT stop early on a page that fails
-to fetch (shared.http.FetchError, including Bright Data itself reporting a
-failure via its x-brd-* headers -- see shared/http.py). Both of those
-"stop early" heuristics were found empirically to be unreliable for Indeed
-specifically: a `start=N` offset returning 0 or erroring does not reliably
-mean no more results exist -- a later offset in the very same query was
-repeatedly observed to return a full page of entirely new, real postings
-right after an earlier offset came back empty (see
-indeed_scraper_experiment/DECISIONS.md for the live investigation this is
-based on). This is Indeed-only; LinkedIn's pagination keeps its original
-stop-early behavior, since LinkedIn's `seeMoreJobPostings` endpoint was not
-found to have this problem.
+Unlike LinkedIn (sources/linkedin/search.py), pagination here distinguishes
+a *failed* fetch from a *successful-but-empty* one, rather than treating
+both the same way:
 
-A 0-card page is still retried once within a single offset before being
-trusted (see _EMPTY_PAGE_RETRY_ATTEMPTS below) -- that's a different,
-narrower mechanism (is *this one* response trustworthy) from the pagination
-stop condition this docstring is about (whether to keep requesting further
-offsets at all).
+- A page that fails to fetch after retries (shared.http.FetchError,
+  including Bright Data itself reporting a failure via its x-brd-*
+  headers -- see shared/http.py) does NOT stop this query's pagination --
+  it's untrustworthy, not evidence of anything, so the next offset is
+  still tried. A `start=N` offset erroring was repeatedly observed to be
+  followed by a later offset in the very same query returning a full page
+  of entirely new, real postings (see indeed_scraper_experiment/
+  DECISIONS.md for the live investigation this is based on).
+- A page that fetches successfully but has zero job cards on it DOES stop
+  this query's pagination -- by the time `_fetch_one_page` returns an
+  empty list (rather than raising), it has already retried that one
+  offset once and confirmed it's still empty (see
+  _EMPTY_PAGE_RETRY_ATTEMPTS below), so a real "nothing here" is a
+  trustworthy signal that there's nothing further either. A merely
+  *partial* page (some cards, fewer than a full page) is not treated as
+  this signal -- only a genuine zero.
+
+This is Indeed-only; LinkedIn's pagination keeps its original stop-early
+behavior, since LinkedIn's `seeMoreJobPostings` endpoint was not found to
+have this problem.
 """
 
 from __future__ import annotations
@@ -132,6 +136,19 @@ async def _fetch_query_job_cards(
                 exc,
             )
             continue
+        if not page_cards:
+            # A *successful* fetch with zero cards, unlike a failed fetch
+            # above, is trustworthy -- _fetch_one_page already retried this
+            # one offset once and confirmed it's still empty -- so further
+            # offsets are not attempted. See module docstring.
+            logger.info(
+                "Indeed search %r/%r: page %d fetched successfully with 0 job cards -- stopping "
+                "pagination for this query (no further offsets attempted).",
+                query.keywords,
+                query.country,
+                page,
+            )
+            break
         cards.extend(page_cards)
     logger.info("Indeed search %r/%r: %d job cards", query.keywords, query.country, len(cards))
     return cards
