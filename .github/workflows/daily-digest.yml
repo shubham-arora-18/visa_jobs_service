@@ -43,4 +43,5 @@ jobs:
           INDEED_POSTS_PER_PAGE: ${{ vars.INDEED_POSTS_PER_PAGE }}
           INDEED_MAX_PAGES_PER_QUERY: ${{ vars.INDEED_MAX_PAGES_PER_QUERY }}
           INDEED_MIN_CARDS_PER_PAGE: ${{ vars.INDEED_MIN_CARDS_PER_PAGE }}
+          DIGEST_RUN_TIMEOUT_SECONDS: ${{ vars.DIGEST_RUN_TIMEOUT_SECONDS }}
         run: visa-jobs-digest
