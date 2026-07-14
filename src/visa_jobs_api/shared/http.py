@@ -1,18 +1,19 @@
-"""Shared async HTTP fetch helper, optionally routed through Decodo's Scraper API
-or Bright Data's Web Unlocker.
+"""Shared async HTTP fetch helper, optionally routed through Decodo's Scraper API.
 
 LinkedIn and Indeed both rate-limit/block bursts of direct requests (see
 linkedin_visa_scraper/DECISIONS.md and indeed_scraper_experiment/DECISIONS.md
-for the investigations) -- these anti-bot proxy services handle the bypass
-(proxying + rendering) on their end instead. LinkedIn uses Decodo; Indeed
-uses Bright Data specifically, because Decodo was tested extensively
-against Indeed and found to be blocked outright (Indeed's Cloudflare
-bot-detection redirects every request to a login wall, on both its
-`standard` and `premium` proxy pools -- see
-indeed_scraper_experiment/DECISIONS.md), while Bright Data works. A failed
-fetch raises FetchError after retries are exhausted; it must never be
-treated as "page has no content", since that previously produced silently
-wrong results (every job looking like it had no description).
+for the investigations) -- Decodo handles the bypass (proxying + rendering)
+on its end instead, for both sources. Indeed used to require Bright Data
+instead of Decodo (an earlier test found Decodo's non-JS-rendered pools
+blocked outright for Indeed), but a later test found Decodo's JS-rendered
+mode (`headless="html"`) fetches Indeed's search AND description pages
+successfully (confirmed live: real content, correct English locale despite
+no geo-pinning param, no login-wall markers) -- see
+indeed_scraper_experiment/DECISIONS.md. Bright Data has been fully removed
+as a result. A failed fetch raises FetchError after retries are exhausted;
+it must never be treated as "page has no content", since that previously
+produced silently wrong results (every job looking like it had no
+description).
 """
 
 from __future__ import annotations
@@ -25,14 +26,12 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 logger = logging.getLogger(__name__)
 
 DECODO_SCRAPE_URL = "https://scraper-api.decodo.com/v2/scrape"
-BRIGHTDATA_REQUEST_URL = "https://api.brightdata.com/request"
 DIRECT_FETCH_TIMEOUT_SECONDS = 15.0
-# Decodo/Bright Data both do real anti-bot bypass work per request
-# (proxying, fingerprinting, headless rendering), so individual calls run
-# several seconds to ~12s+ -- much slower than a direct fetch, hence the
-# longer timeout.
+# Decodo does real anti-bot bypass work per request (proxying,
+# fingerprinting, headless rendering), so individual calls run several
+# seconds to ~12s+ -- much slower than a direct fetch, hence the longer
+# timeout.
 DECODO_FETCH_TIMEOUT_SECONDS = 60.0
-BRIGHTDATA_FETCH_TIMEOUT_SECONDS = 60.0
 
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
@@ -65,15 +64,44 @@ async def _get_direct(client: httpx.AsyncClient, url: str) -> httpx.Response:
     wait=wait_exponential(multiplier=1, min=1, max=8),
     reraise=True,
 )
-async def _get_via_decodo(client: httpx.AsyncClient, url: str, *, username: str, password: str) -> str:
+async def _get_via_decodo(
+    client: httpx.AsyncClient, url: str, *, username: str, password: str, headless: str | None = None
+) -> str:
+    body: dict[str, str] = {"url": url, "proxy_pool": "standard"}
+    if headless:
+        # `headless="html"` turns on Decodo's JS-rendered mode -- required
+        # for Indeed specifically (confirmed live: without it, Indeed's
+        # pages come back blocked/failed; with it, real content). LinkedIn
+        # doesn't pass this and works fine without it, so it's opt-in per
+        # call rather than always-on. See module docstring.
+        body["headless"] = headless
     response = await client.post(
         DECODO_SCRAPE_URL,
         auth=(username, password),
-        json={"url": url, "proxy_pool": "standard"},
+        json=body,
         timeout=DECODO_FETCH_TIMEOUT_SECONDS,
     )
     response.raise_for_status()
-    result = response.json()["results"][0]
+    payload = response.json()
+    if "results" not in payload:
+        # Decodo itself responded 200 but couldn't scrape the target at
+        # all -- its own top-level `status`/`status_code`/`message` fields
+        # are present instead of a `results` array (confirmed live: this
+        # shape shows up for a scrape it fully gave up on, e.g. status_code
+        # 613). Without this check, the `["results"][0]` access below
+        # raises an unhandled KeyError instead of a clean FetchError.
+        # Decodo's own status_code here is a proprietary code, not a real
+        # HTTP status -- passing it straight through to
+        # httpx.HTTPStatusError would silently disable retries (it won't
+        # match _RETRYABLE_STATUS_CODES), so this is deliberately
+        # normalized to 502 instead, since Decodo's own error message
+        # explicitly suggests retrying often does help.
+        raise httpx.HTTPStatusError(
+            f"Decodo could not scrape {url!r}: {payload.get('message', payload)}",
+            request=response.request,
+            response=httpx.Response(502, request=response.request),
+        )
+    result = payload["results"][0]
     upstream_status = result["status_code"]
     if upstream_status >= 400:
         # Decodo itself responded 200 (the proxy call succeeded), but the
@@ -89,47 +117,6 @@ async def _get_via_decodo(client: httpx.AsyncClient, url: str, *, username: str,
     return result["content"]
 
 
-@retry(
-    retry=retry_if_exception(_is_retryable),
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=8),
-    reraise=True,
-)
-async def _get_via_brightdata(client: httpx.AsyncClient, url: str, *, api_key: str, zone: str, country: str) -> str:
-    response = await client.post(
-        BRIGHTDATA_REQUEST_URL,
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-        # `country` pins the proxy exit node's geo -- without it, a first
-        # test of Indeed's US site came back entirely in Spanish even with
-        # no location filter in the query itself (the exit node's assumed
-        # locale didn't match) -- see indeed_scraper_experiment/DECISIONS.md.
-        json={"zone": zone, "url": url, "country": country, "format": "raw"},
-        timeout=BRIGHTDATA_FETCH_TIMEOUT_SECONDS,
-    )
-    response.raise_for_status()
-    # Bright Data itself can respond 200 while its own x-brd-* headers say
-    # the fetch failed (IP blacklisted, an authwall/login page was detected
-    # instead of real content, etc.) -- found live while investigating
-    # Indeed pagination (see indeed_scraper_experiment/DECISIONS.md). Without
-    # this check, that failure is silently treated as "page fetched
-    # successfully" with garbage/empty content -- exactly the "must never be
-    # treated as page has no content" failure mode this module's docstring
-    # already warns about for other failure paths. Re-raising with the real
-    # x-brd-status-code lets _is_retryable classify it the same way any
-    # other upstream failure is (e.g. 502/authwall retries, 401/blacklist
-    # doesn't -- retrying an IP block immediately can't help).
-    brd_error = response.headers.get("x-brd-error")
-    if brd_error:
-        brd_status_header = response.headers.get("x-brd-status-code")
-        upstream_status = int(brd_status_header) if brd_status_header and brd_status_header.isdigit() else 502
-        raise httpx.HTTPStatusError(
-            f"Bright Data reported a failure for {url!r}: {brd_error}",
-            request=response.request,
-            response=httpx.Response(upstream_status, request=response.request),
-        )
-    return response.text
-
-
 async def fetch_html(
     client: httpx.AsyncClient,
     url: str,
@@ -137,12 +124,12 @@ async def fetch_html(
     via_decodo: bool = False,
     decodo_username: str | None = None,
     decodo_password: str | None = None,
-    via_brightdata: bool = False,
-    brightdata_api_key: str | None = None,
-    brightdata_zone: str | None = None,
-    brightdata_country: str | None = None,
+    decodo_headless: str | None = None,
 ) -> str:
-    """Fetch a URL's raw HTML, optionally unblocked through Decodo or Bright Data.
+    """Fetch a URL's raw HTML, optionally unblocked through Decodo.
+
+    `decodo_headless="html"` turns on Decodo's JS-rendered mode -- required
+    for Indeed (see _get_via_decodo's docstring), not used for LinkedIn.
 
     Raises FetchError (chained from the underlying httpx exception) once
     every retry attempt has failed.
@@ -151,14 +138,8 @@ async def fetch_html(
         if via_decodo:
             if not decodo_username or not decodo_password:
                 raise ValueError("decodo_username and decodo_password are required when via_decodo=True")
-            return await _get_via_decodo(client, url, username=decodo_username, password=decodo_password)
-        if via_brightdata:
-            if not brightdata_api_key or not brightdata_zone or not brightdata_country:
-                raise ValueError(
-                    "brightdata_api_key, brightdata_zone, and brightdata_country are required when via_brightdata=True"
-                )
-            return await _get_via_brightdata(
-                client, url, api_key=brightdata_api_key, zone=brightdata_zone, country=brightdata_country
+            return await _get_via_decodo(
+                client, url, username=decodo_username, password=decodo_password, headless=decodo_headless
             )
         response = await _get_direct(client, url)
     except (httpx.TimeoutException, httpx.TransportError, httpx.HTTPStatusError) as exc:

@@ -34,7 +34,15 @@ _SYSTEM_PROMPT = (
     'Hedged-but-affirmative phrasing still counts as an offer: "visa '
     'sponsorship possible" or "sponsorship considered for the right '
     'candidate" mean sponsorship is on the table, UNLESS paired with '
-    "actual negating language."
+    "actual negating language.\n\n"
+    "A posting that restricts sponsorship to one specific country's "
+    "citizens/residents (e.g. \"visa sponsorship available for UK "
+    "nationals only\", \"must be an EU citizen\", \"open to Australian "
+    'citizens") does NOT count as a genuine offer -- UNLESS that country '
+    "is India, which never disqualifies it. General or unrestricted "
+    "sponsorship language (no nationality/residency restriction "
+    "mentioned, or explicitly open to any nationality) still counts "
+    "normally."
 )
 
 
@@ -62,7 +70,6 @@ class IndeedSource:
     async def fetch_jobs(self) -> list[NormalizedJob]:
         queries = build_search_queries(self._keywords)
         cards = await fetch_all_job_cards(
-            self._http_client,
             queries,
             settings=self._settings,
             posted_within_hours=self._posted_within_hours,

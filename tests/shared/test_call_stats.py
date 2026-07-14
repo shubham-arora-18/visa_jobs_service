@@ -33,13 +33,13 @@ def test_log_summary_includes_a_line_per_country_with_all_four_counts(caplog) ->
         stats.log_summary(logger)
 
     messages = "\n".join(record.getMessage() for record in caplog.records)
-    assert "United States: Bright Data API calls for Indeed job card: 1" in messages
-    assert "Bright Data API calls for Indeed job details: 1" in messages
+    assert "United States: Selenium calls for Indeed job card: 1" in messages
+    assert "Decodo API calls for Indeed job details: 1" in messages
     assert "Decodo API calls for LinkedIn job card: 1" in messages
     assert "Decodo API calls for LinkedIn job details: 1" in messages
     # A country with only one of the four call types still gets a line,
     # with the other three shown as 0 rather than being omitted.
-    assert "Ireland: Bright Data API calls for Indeed job card: 0" in messages
+    assert "Ireland: Selenium calls for Indeed job card: 0" in messages
 
 
 def test_log_summary_handles_no_calls_recorded(caplog) -> None:
@@ -48,4 +48,7 @@ def test_log_summary_handles_no_calls_recorded(caplog) -> None:
     with caplog.at_level(logging.INFO, logger="test-call-stats-empty"):
         stats.log_summary(logger)
     # Just the header line, no per-country lines, and no crash.
-    assert any("Bright Data (Indeed) / Decodo (LinkedIn)" in record.getMessage() for record in caplog.records)
+    assert any(
+        "Selenium (Indeed search) / Decodo (Indeed details, LinkedIn)" in record.getMessage()
+        for record in caplog.records
+    )

@@ -37,11 +37,6 @@ class Settings(BaseSettings):
     decodo_username: str
     decodo_password: str
 
-    # Bright Data -- used only for Indeed (Decodo is blocked outright for
-    # Indeed by its Cloudflare bot-detection; see shared/http.py's docstring).
-    brightdata_api_key: str
-    brightdata_zone: str
-
     # Per-stage concurrency caps.
     hn_llm_concurrency: int = Field(default=5, gt=0)
     linkedin_search_concurrency: int = Field(default=10, gt=0)
@@ -49,7 +44,10 @@ class Settings(BaseSettings):
     linkedin_llm_concurrency: int = Field(default=16, gt=0)
     # 4 is not an arbitrary choice -- 8 concurrent Bright Data requests were
     # found to trigger "502 Bad Gateway" from Bright Data's own backend
-    # (not Indeed), while 4 ran clean; see indeed_scraper_experiment/DECISIONS.md.
+    # (not Indeed) back when Indeed's search went through Bright Data; see
+    # indeed_scraper_experiment/DECISIONS.md. Kept as Indeed's search
+    # concurrency cap now that it's Selenium-driven too, since running many
+    # concurrent headless Chrome instances has its own resource cost.
     indeed_search_concurrency: int = Field(default=4, gt=0)
     indeed_description_concurrency: int = Field(default=4, gt=0)
     indeed_llm_concurrency: int = Field(default=16, gt=0)
@@ -67,17 +65,18 @@ class Settings(BaseSettings):
     # offset. Indeed-only; see sources/indeed/search.py's module docstring.
     indeed_min_cards_per_page: int = Field(default=10, gt=0)
 
-    # Optional `vjk` (viewed-job-key) query param appended to every Indeed
-    # search URL when set -- empty by default (omitted from the URL
-    # entirely), since it pins to one specific job posting captured from a
-    # real browser session and isn't something this codebase generates on
-    # its own. Indeed-only; LinkedIn has no equivalent parameter.
-    indeed_vjk: str = Field(default="")
+    # How long to wait after loading an Indeed search page (via Selenium)
+    # for its client-side JS to finish before reading the page's HTML/URL --
+    # in particular, the `vjk` param Indeed's own JS appends to the address
+    # bar (see sources/indeed/selenium_client.py) only shows up after this
+    # settles, not immediately after navigation.
+    indeed_page_settle_seconds: float = Field(default=6, gt=0)
 
     # Upper bound on collect_jobs() across all sources -- with per-country
-    # retries/pagination and a 60s-per-request proxy timeout on both Bright
-    # Data and Decodo, an unbounded run can otherwise stretch into many
-    # minutes with nothing timing it out from inside the app. Doubled from
+    # retries/pagination and a 60s-per-request Decodo timeout (plus
+    # Selenium's own page-load/settle time for Indeed search), an unbounded
+    # run can otherwise stretch into many minutes with nothing timing it
+    # out from inside the app. Doubled from
     # an original 600s: removing Indeed's sc= (Job Type/Experience Level)
     # filter lets more candidates through per country (verified live,
     # Indeed alone: 97 raw cards -> 23 after filter, up from ~7-15 before),

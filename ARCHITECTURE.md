@@ -35,8 +35,8 @@ flowchart TB
             LISource["source.py<br/>LinkedInSource"]
         end
         subgraph IN["indeed/"]
-            INSearch["search.py<br/>adaptive pagination,<br/>Job Type/Experience Level filter,<br/>via Bright Data"]
-            INDesc["description.py<br/>via Bright Data"]
+            INSearch["search.py<br/>adaptive pagination (nav-presence gate + vjk),<br/>via Selenium/headless Chrome"]
+            INDesc["description.py<br/>via Decodo (JS-rendered)"]
             INDomains["country_domains.py<br/>8 English-market countries"]
             INSource["source.py<br/>IndeedSource"]
         end
@@ -48,8 +48,8 @@ flowchart TB
         TitleFilter["title_filter.py<br/>dedup + title filter<br/>(LinkedIn + Indeed)"]
         Models["models.py<br/>NormalizedJob"]
         Concurrency["concurrency.py<br/>gather_limited() -- per-stage<br/>asyncio.Semaphore caps"]
-        Http["http.py<br/>fetch_html() direct,<br/>via Decodo, or via Bright Data"]
-        CallStats["call_stats.py<br/>per-country Bright Data/Decodo<br/>call counters, one shared instance<br/>per digest run"]
+        Http["http.py<br/>fetch_html() direct or<br/>via Decodo (optionally JS-rendered)"]
+        CallStats["call_stats.py<br/>per-country Selenium/Decodo<br/>call counters, one shared instance<br/>per digest run"]
     end
 
     Config["config.py<br/>Settings (.env)<br/>secrets + per-stage concurrency"]
@@ -137,16 +137,16 @@ sequenceDiagram
         LI-->>Agg: list[NormalizedJob]
     and
         Agg->>IN: fetch_jobs()
-        IN->>IN: search pages (INDEED_SEARCH_CONCURRENCY,<br/>adaptive pagination, Job Type/Experience Level filter,<br/>via Bright Data)
+        IN->>IN: search pages (INDEED_SEARCH_CONCURRENCY,<br/>adaptive pagination via nav-presence gate + vjk,<br/>via Selenium/headless Chrome)
         IN->>Stats: record_indeed_search_call(country) per page
         IN->>IN: dedupe, title-filter (fromage already bounds recency)
-        IN->>IN: fetch descriptions (INDEED_DESCRIPTION_CONCURRENCY, via Bright Data)
+        IN->>IN: fetch descriptions (INDEED_DESCRIPTION_CONCURRENCY, via Decodo)
         IN->>Stats: record_indeed_description_call(country) per fetch
         IN->>IN: LLM-confirm candidates (INDEED_LLM_CONCURRENCY)
         IN-->>Agg: list[NormalizedJob]
     end
     Agg-->>Service: merged list[NormalizedJob]
-    Service->>Stats: log_summary() -- per-country Bright Data/Decodo call breakdown<br/>(logged even if a source raised)
+    Service->>Stats: log_summary() -- per-country Selenium/Decodo call breakdown<br/>(logged even if a source raised)
     Service->>Agg: group_and_sort_by_country(jobs)
     Note over Agg: group by country (alphabetical),<br/>sort each country's jobs by posted_at desc,<br/>unresolved country -> "Remote / Unspecified"
     Agg-->>Service: grouped sections + rendered HTML

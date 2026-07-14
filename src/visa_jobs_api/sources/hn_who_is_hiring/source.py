@@ -39,7 +39,15 @@ _SYSTEM_PROMPT = (
     "underneath it does (e.g. someone asks about it and the poster confirms). "
     "You may be shown one or more such reply comments below the posting -- "
     "treat a clear, non-question statement there the same as if it were in "
-    "the posting itself."
+    "the posting itself.\n\n"
+    "A posting that restricts sponsorship to one specific country's "
+    "citizens/residents (e.g. \"visa sponsorship available for UK "
+    "nationals only\", \"must be an EU citizen\", \"open to Australian "
+    'citizens") does NOT count as a genuine offer -- UNLESS that country '
+    "is India, which never disqualifies it. General or unrestricted "
+    "sponsorship language (no nationality/residency restriction "
+    "mentioned, or explicitly open to any nationality) still counts "
+    "normally."
 )
 
 

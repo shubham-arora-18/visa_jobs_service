@@ -16,6 +16,7 @@ dependencies = [
     "langdetect>=1.0.9",
     "tenacity>=8.5",
     "aiosmtplib>=3.0",
+    "selenium>=4.15",
 ]
 
 [project.optional-dependencies]
