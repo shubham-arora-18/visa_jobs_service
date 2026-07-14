@@ -17,9 +17,15 @@ both the same way:
   empty list (rather than raising), it has already retried that one
   offset once and confirmed it's still empty (see
   _EMPTY_PAGE_RETRY_ATTEMPTS below), so a real "nothing here" is a
-  trustworthy signal that there's nothing further either. A merely
-  *partial* page (some cards, fewer than a full page) is not treated as
-  this signal -- only a genuine zero.
+  trustworthy signal that there's nothing further either.
+- A page that fetches successfully but returns fewer than
+  `indeed_min_cards_per_page` cards also stops this query's pagination --
+  treated as the last page of real results. Note this is a deliberate
+  simplifying assumption, not a guarantee: earlier live testing did
+  observe a later offset return a full page of new postings right after
+  an earlier offset came back partial (see indeed_scraper_experiment/
+  DECISIONS.md), so this trades a small amount of missed coverage for
+  fewer wasted requests on likely-exhausted queries.
 
 This is Indeed-only; LinkedIn's pagination keeps its original stop-early
 behavior, since LinkedIn's `seeMoreJobPostings` endpoint was not found to
@@ -150,6 +156,19 @@ async def _fetch_query_job_cards(
             )
             break
         cards.extend(page_cards)
+        if len(page_cards) < settings.indeed_min_cards_per_page:
+            # A partial page is treated as the last page of real results --
+            # see module docstring for the tradeoff this accepts.
+            logger.info(
+                "Indeed search %r/%r: page %d returned %d job card(s), below the %d-card "
+                "threshold -- stopping pagination for this query (no further offsets attempted).",
+                query.keywords,
+                query.country,
+                page,
+                len(page_cards),
+                settings.indeed_min_cards_per_page,
+            )
+            break
     logger.info("Indeed search %r/%r: %d job cards", query.keywords, query.country, len(cards))
     return cards
 
