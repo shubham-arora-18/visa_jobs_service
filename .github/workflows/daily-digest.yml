@@ -1,10 +1,14 @@
 name: Daily visa jobs digest
 
 on:
-  schedule:
-    # 03:30 UTC = 09:00 IST (UTC+5:30). GitHub Actions cron is always UTC --
-    # adjust this if the target timezone isn't IST.
-    - cron: "30 3 * * *"
+  # No schedule trigger -- Indeed search via Selenium is blocked from
+  # GitHub Actions' runner IP (and from a Decodo datacenter proxy tested
+  # as an alternative), but works cleanly from a residential IP. The
+  # digest is running locally instead (scripts/run_digest_locally.sh, via
+  # a macOS launchd LaunchAgent) until this is resolved -- see
+  # DECISIONS.md's "Indeed search via Selenium works from a residential
+  # IP..." entry. workflow_dispatch is kept so this can still be triggered
+  # manually for testing.
   workflow_dispatch: {}
 
 jobs:

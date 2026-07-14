@@ -1,0 +1,113 @@
+name: Investigate Indeed blocking on GitHub Actions
+
+# Manual-only diagnostic workflow -- never scheduled, never sends the real
+# digest email. Investigates why the production Selenium-based Indeed
+# search (search.py, selenium_client.py) returns 0 job cards + no
+# pagination nav for every single country when run from this repo's
+# GitHub Actions runner, despite working cleanly when run locally from a
+# residential/office IP (confirmed live 2026-07-14, run 29321931480 on
+# add-visa-jobs-api). Leading hypothesis: Indeed's bot detection blocks
+# based on the runner's datacenter IP regardless of using a real browser.
+#
+# Runs 4 independent diagnostic variants in one job and uploads all raw
+# evidence (full page source + screenshots, not just log output) as a
+# single artifact:
+#   1. direct-http    -- a plain HTTP GET, no browser, no proxy (baseline)
+#   2. selenium-chromium-noproxy -- today's exact production setup
+#      (browser-actions/setup-chrome's Chromium build, no proxy)
+#   3. selenium-realchrome-noproxy -- same as #2 but with actual Google
+#      Chrome (via Google's apt repo) instead of a Chromium snapshot build,
+#      to isolate whether the browser build itself matters
+#   4. selenium-chromium-proxy -- same as #2 but routed through a Decodo
+#      datacenter proxy via a local unauthenticated relay (proxy.py),
+#      since Chrome's --proxy-server flag has no native username:password
+#      support. Requires DECODO_PROXY_HOST/PORT/USERNAME/PASSWORD secrets
+#      to be set (see Decodo's dashboard -> Proxies -> Free Proxies for a
+#      free datacenter proxy's connection details) -- skips gracefully via
+#      continue-on-error if they aren't, so the other 3 variants still run.
+#      NOTE: the proxy.py invocation here is unverified against a live run
+#      (no way to test the exact plugin/CLI syntax outside CI) -- if this
+#      step's own log shows a proxy.py startup error rather than a real
+#      diagnostic result, that's the thing to fix first, not evidence
+#      about Indeed itself.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  investigate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -e . proxy.py
+
+      - name: Install Chromium (today's production setup)
+        uses: browser-actions/setup-chrome@v1
+        id: chromium
+
+      - name: Install real Google Chrome (for comparison)
+        run: |
+          wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update -qq
+          sudo apt-get install -y google-chrome-stable
+          google-chrome --version
+
+      - name: 1. Direct HTTP fetch (no browser, no proxy -- baseline)
+        run: python3 scripts/diagnose_indeed_blocking.py --mode direct-http --output-dir out/1-direct-http
+
+      - name: 2. Selenium + Chromium, no proxy (today's production setup)
+        run: python3 scripts/diagnose_indeed_blocking.py --mode selenium --output-dir out/2-selenium-chromium-noproxy
+
+      - name: 3. Selenium + real Google Chrome, no proxy
+        run: |
+          python3 scripts/diagnose_indeed_blocking.py --mode selenium \
+            --output-dir out/3-selenium-realchrome-noproxy \
+            --chrome-binary /opt/google/chrome/google-chrome
+
+      - name: 4. Start local proxy relay to Decodo (best effort)
+        id: proxy_relay
+        continue-on-error: true
+        env:
+          DECODO_PROXY_HOST: ${{ secrets.DECODO_PROXY_HOST }}
+          DECODO_PROXY_PORT: ${{ secrets.DECODO_PROXY_PORT }}
+          DECODO_PROXY_USERNAME: ${{ secrets.DECODO_PROXY_USERNAME }}
+          DECODO_PROXY_PASSWORD: ${{ secrets.DECODO_PROXY_PASSWORD }}
+        run: |
+          if [ -z "$DECODO_PROXY_HOST" ]; then
+            echo "DECODO_PROXY_HOST not set -- skipping proxy variant entirely."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          nohup proxy \
+            --hostname 127.0.0.1 --port 8899 \
+            --plugins proxy.plugin.ProxyPoolPlugin \
+            --proxy-pool "${DECODO_PROXY_USERNAME}:${DECODO_PROXY_PASSWORD}@${DECODO_PROXY_HOST}:${DECODO_PROXY_PORT}" \
+            > proxy_relay.log 2>&1 &
+          sleep 3
+          cat proxy_relay.log || true
+          curl -x http://127.0.0.1:8899 -s -o /dev/null -w "relay self-test HTTP status: %{http_code}\n" https://api.ipify.org || echo "relay self-test curl failed"
+
+      - name: 5. Selenium + Chromium, through the proxy relay (best effort)
+        if: steps.proxy_relay.outputs.skip != 'true'
+        continue-on-error: true
+        run: |
+          python3 scripts/diagnose_indeed_blocking.py --mode selenium \
+            --output-dir out/4-selenium-chromium-proxy \
+            --proxy-server http://127.0.0.1:8899
+
+      - name: Upload all diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: indeed-blocking-diagnostics
+          path: |
+            out/
+            proxy_relay.log
+          if-no-files-found: warn
