@@ -35,7 +35,7 @@ flowchart TB
             LISource["source.py<br/>LinkedInSource"]
         end
         subgraph IN["indeed/"]
-            INSearch["search.py<br/>adaptive pagination,<br/>Job Type/Experience Level filter,<br/>via Bright Data"]
+            INSearch["search.py<br/>adaptive pagination (nav-presence gate + vjk),<br/>via Selenium/headless Chrome"]
             INDesc["description.py<br/>via Bright Data"]
             INDomains["country_domains.py<br/>8 English-market countries"]
             INSource["source.py<br/>IndeedSource"]
@@ -137,7 +137,7 @@ sequenceDiagram
         LI-->>Agg: list[NormalizedJob]
     and
         Agg->>IN: fetch_jobs()
-        IN->>IN: search pages (INDEED_SEARCH_CONCURRENCY,<br/>adaptive pagination, Job Type/Experience Level filter,<br/>via Bright Data)
+        IN->>IN: search pages (INDEED_SEARCH_CONCURRENCY,<br/>adaptive pagination via nav-presence gate + vjk,<br/>via Selenium/headless Chrome)
         IN->>Stats: record_indeed_search_call(country) per page
         IN->>IN: dedupe, title-filter (fromage already bounds recency)
         IN->>IN: fetch descriptions (INDEED_DESCRIPTION_CONCURRENCY, via Bright Data)

@@ -20,6 +20,14 @@ jobs:
       - name: Install dependencies
         run: pip install -e .
 
+      # Indeed's search pages go through Selenium/real headless Chrome now
+      # (see src/visa_jobs_api/sources/indeed/selenium_client.py), not
+      # Bright Data -- this guarantees a Chrome binary is present on the
+      # runner rather than relying on whatever ubuntu-latest happens to
+      # ship. Selenium's own Selenium Manager auto-downloads a matching
+      # chromedriver at run time, so no separate driver step is needed.
+      - uses: browser-actions/setup-chrome@v1
+
       - name: Run digest
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -30,7 +38,7 @@ jobs:
           DECODO_PASSWORD: ${{ secrets.DECODO_PASSWORD }}
           BRIGHTDATA_API_KEY: ${{ secrets.BRIGHTDATA_API_KEY }}
           BRIGHTDATA_ZONE: ${{ secrets.BRIGHTDATA_ZONE }}
-          INDEED_VJK: ${{ secrets.INDEED_VJK }}
+          INDEED_PAGE_SETTLE_SECONDS: ${{ vars.INDEED_PAGE_SETTLE_SECONDS }}
           HN_LLM_CONCURRENCY: ${{ vars.HN_LLM_CONCURRENCY }}
           LINKEDIN_SEARCH_CONCURRENCY: ${{ vars.LINKEDIN_SEARCH_CONCURRENCY }}
           LINKEDIN_DESCRIPTION_CONCURRENCY: ${{ vars.LINKEDIN_DESCRIPTION_CONCURRENCY }}

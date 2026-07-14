@@ -13,6 +13,19 @@ official API and no documentation to work from:
   `https://{domain}/viewjob?jk={job_key}`, same shape as LinkedIn's job
   cards being built from `data-entity-urn` rather than trusting a raw
   `href`.
+
+has_additional_pages() parses the pagination nav's numbered page links
+(`a[data-testid^="pagination-page-"]`) to decide whether a query's first
+page is worth paginating past at all. Confirmed live (see
+indeed_scraper_experiment/DECISIONS.md): a first page with an EMPTY
+pagination nav (no numbered links at all) means there is genuinely only
+one page of real results -- every subsequent `start=N` offset tested still
+returned an HTTP 200 with cards, but they were the exact same cards as
+page 0, not new ones. A first page with ANY numbered links means more
+pages are worth trying, but the highest number shown is a sliding window,
+not the true total (a UK test kept returning fresh cards on pages up to
+`start=90` while the nav only ever showed page numbers 1-5) -- so this is
+a one-time go/no-go gate checked on page 0 only, never a page-count bound.
 """
 
 from __future__ import annotations
@@ -20,6 +33,12 @@ from __future__ import annotations
 from bs4 import BeautifulSoup, Tag
 
 from visa_jobs_api.sources.indeed.models import JobCard
+
+
+def has_additional_pages(html: str) -> bool:
+    """Whether this page's pagination nav advertises any further page at all."""
+    soup = BeautifulSoup(html, "html.parser")
+    return bool(soup.select('a[data-testid^="pagination-page-"]'))
 
 
 def parse_job_cards(html: str, *, domain: str, query_country: str) -> list[JobCard]:

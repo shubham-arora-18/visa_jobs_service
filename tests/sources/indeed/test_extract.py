@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from visa_jobs_api.sources.indeed.extract import parse_job_cards
+from visa_jobs_api.sources.indeed.extract import has_additional_pages, parse_job_cards
 
 
 def _card_html(job_key: str, title: str, company: str, location: str) -> str:
@@ -53,3 +53,28 @@ def test_parse_job_cards_handles_missing_company_and_location() -> None:
     assert len(cards) == 1
     assert cards[0].company == ""
     assert cards[0].location == ""
+
+
+def test_has_additional_pages_true_when_numbered_links_present() -> None:
+    html = """
+    <nav role="navigation" aria-label="pagination">
+      <ul>
+        <li><a data-testid="pagination-page-1">1</a></li>
+        <li><a data-testid="pagination-page-2">2</a></li>
+        <li><a data-testid="pagination-page-next">Next</a></li>
+      </ul>
+    </nav>
+    """
+    assert has_additional_pages(html) is True
+
+
+def test_has_additional_pages_false_when_nav_is_empty() -> None:
+    # Real case confirmed live: an empty <ul> inside the pagination nav --
+    # no numbered links at all -- means only one page of real results
+    # exists, even though the nav element itself is still present.
+    html = '<nav role="navigation" aria-label="pagination"><ul></ul></nav>'
+    assert has_additional_pages(html) is False
+
+
+def test_has_additional_pages_false_when_nav_is_absent_entirely() -> None:
+    assert has_additional_pages("<html><body>no nav here</body></html>") is False

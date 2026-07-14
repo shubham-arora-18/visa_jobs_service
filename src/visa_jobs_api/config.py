@@ -37,8 +37,11 @@ class Settings(BaseSettings):
     decodo_username: str
     decodo_password: str
 
-    # Bright Data -- used only for Indeed (Decodo is blocked outright for
-    # Indeed by its Cloudflare bot-detection; see shared/http.py's docstring).
+    # Bright Data -- used only for Indeed's description-page fetches
+    # (Decodo is blocked outright for Indeed by its Cloudflare
+    # bot-detection; see shared/http.py's docstring). Indeed's *search*
+    # pages go through Selenium/real Chrome instead -- see
+    # sources/indeed/selenium_client.py.
     brightdata_api_key: str
     brightdata_zone: str
 
@@ -67,12 +70,12 @@ class Settings(BaseSettings):
     # offset. Indeed-only; see sources/indeed/search.py's module docstring.
     indeed_min_cards_per_page: int = Field(default=10, gt=0)
 
-    # Optional `vjk` (viewed-job-key) query param appended to every Indeed
-    # search URL when set -- empty by default (omitted from the URL
-    # entirely), since it pins to one specific job posting captured from a
-    # real browser session and isn't something this codebase generates on
-    # its own. Indeed-only; LinkedIn has no equivalent parameter.
-    indeed_vjk: str = Field(default="")
+    # How long to wait after loading an Indeed search page (via Selenium)
+    # for its client-side JS to finish before reading the page's HTML/URL --
+    # in particular, the `vjk` param Indeed's own JS appends to the address
+    # bar (see sources/indeed/selenium_client.py) only shows up after this
+    # settles, not immediately after navigation.
+    indeed_page_settle_seconds: float = Field(default=6, gt=0)
 
     # Upper bound on collect_jobs() across all sources -- with per-country
     # retries/pagination and a 60s-per-request proxy timeout on both Bright
