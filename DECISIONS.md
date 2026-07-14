@@ -596,3 +596,49 @@ no indication in the response; Indeed's Job Type/Experience Level filter
 (`_SC_FILTER`) hardcoded with no config override; synchronous BeautifulSoup
 parsing inside async functions (pre-existing pattern, now used by two
 sources instead of one).
+
+## Indeed search via Selenium works from a residential IP, but is blocked from any datacenter IP -- including GitHub Actions
+
+The Selenium-based Indeed search migration (replacing Bright Data for
+search pages -- see selenium_client.py's docstring) was validated live and
+worked cleanly, but only ever from this machine's residential/office IP.
+The very first scheduled/dispatched run on GitHub Actions
+(`add-visa-jobs-api`, run 29321931480, 2026-07-14) returned 0 job cards
+and no pagination nav for every single one of the 8 countries, both retry
+attempts each -- a complete, uniform failure, not normal Indeed
+volatility. No `WebDriverException`/crash anywhere in the run: Chrome
+launched fine, pages "loaded" successfully from Selenium's point of view,
+just with no real content.
+
+Follow-up investigation (`scripts/diagnose_indeed_blocking.py`,
+`.github/workflows/investigate-indeed-blocking.yml`) narrowed this down
+further: routing the exact same Selenium code through a Decodo
+**datacenter** proxy (a different datacenter IP than GitHub Actions' own,
+different ASN, different physical location) reproduced the identical
+failure signature locally -- `page_source` containing both `"Just a
+moment"` (Cloudflare's interstitial challenge) and `"Additional
+Verification Required"`, 0 cards, no pagination nav, no `vjk` captured.
+
+This means the root cause is **datacenter IP reputation specifically**,
+not "GitHub Actions" and not "real browser vs. raw HTTP" as originally
+framed -- a real, JS-executing browser session gets exactly the same
+Cloudflare-style block as a raw HTTP fetch once it's coming from a
+datacenter ASN, regardless of which specific datacenter or which specific
+browser build. Only a residential/ISP-attributed exit IP has ever
+avoided this, across every variant tested throughout this whole
+investigation (raw direct HTTP, Bright Data, this Decodo datacenter proxy,
+and GitHub Actions' own runner).
+
+**Not yet tested**: a residential or "Static Residential (ISP)" proxy
+(Decodo exposes these as separate products from the datacenter one tested
+above) routing Selenium's traffic -- this is the more relevant next
+experiment, since it's the one variable that hasn't been tried yet and
+every other one has failed identically.
+
+**Temporary mitigation while this is unresolved**: the GitHub Actions
+`schedule:` cron trigger has been removed from `daily-digest.yml`
+(`workflow_dispatch` kept, so it can still be triggered manually for
+testing) -- the digest is being run locally instead via
+`scripts/run_digest_locally.sh`, scheduled through a macOS launchd
+LaunchAgent, until Indeed search can run from GitHub Actions without being
+blocked.
