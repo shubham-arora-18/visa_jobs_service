@@ -7,7 +7,8 @@ configurable per-request (see below).
 
 See `ARCHITECTURE.md` for a diagram of how it fits together, and
 `DECISIONS.md` for the reasoning behind the non-obvious choices made while
-building it.
+building it. See `LOCAL_SETUP.md` for a full checklist to run this on a
+new machine, including the local scheduled-run setup described below.
 
 ## Setup
 
@@ -17,13 +18,16 @@ python3.11 -m venv .venv
 cp .env.example .env  # fill in real values
 ```
 
+Also requires Google Chrome installed (Indeed search uses Selenium --
+Selenium 4's built-in Selenium Manager auto-downloads a matching
+chromedriver, no separate driver install needed).
+
 Required `.env` values: `HF_TOKEN` (Hugging Face Inference Providers),
 `GMAIL_ADDRESS`/`GMAIL_APP_PASSWORD`/`DIGEST_RECIPIENTS` (email delivery),
-`DECODO_USERNAME`/`DECODO_PASSWORD` (LinkedIn scraping via Decodo's Scraper
-API -- LinkedIn blocks direct scraping at any real concurrency, see
-`DECISIONS.md`), `BRIGHTDATA_API_KEY`/`BRIGHTDATA_ZONE` (Indeed scraping
-via Bright Data's Web Unlocker -- Decodo was tested extensively against
-Indeed and found to be blocked outright, see `DECISIONS.md`).
+`DECODO_USERNAME`/`DECODO_PASSWORD` (LinkedIn scraping, and Indeed
+description-page fetches, via Decodo's Scraper API -- see `DECISIONS.md`).
+Indeed's *search* pages go through Selenium/a real headless Chrome
+instead of a proxy (see `sources/indeed/selenium_client.py`).
 
 ## Run
 
@@ -51,20 +55,24 @@ sources (Indeed maps it to the closest `fromage` value it supports: 1/3/7/14
 days -- see `sources/indeed/search.py`). This runs all three sources
 concurrently, emails the combined digest to `DIGEST_RECIPIENTS`, and
 returns a JSON summary of what was found. A combined per-country
-breakdown of every Bright Data (Indeed) and Decodo (LinkedIn) API call
-made during the run is logged at the end (see `shared/call_stats.py`).
+breakdown of every Selenium (Indeed search) and Decodo (Indeed details,
+LinkedIn) call made during the run is logged at the end (see
+`shared/call_stats.py`).
 
 ## Scheduled daily run
 
-`.github/workflows/daily-digest.yml` runs the digest automatically every
-day at 09:00 IST via the `visa-jobs-digest` CLI entry point (same
-`run_digest` logic as the API, defaulting to a 1-day window -- no HTTP
-server needed for the scheduled run). Requires these set as repo
+Currently runs **locally**, not on GitHub Actions -- Indeed search via
+Selenium is blocked from GitHub Actions' datacenter IP (see `DECISIONS.md`).
+`scripts/run_digest_locally.sh` runs the digest via the `visa-jobs-digest`
+CLI entry point (same `run_digest` logic as the API, defaulting to a
+1-day window), scheduled through a macOS `launchd` LaunchAgent for a daily
+9:00 AM run. See `LOCAL_SETUP.md` for the full setup checklist.
+
+`.github/workflows/daily-digest.yml` still exists for manual testing
+(`workflow_dispatch` only, no schedule) -- requires these set as repo
 secrets/variables: `HF_TOKEN`, `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`,
-`DECODO_USERNAME`, `DECODO_PASSWORD`, `BRIGHTDATA_API_KEY`,
-`BRIGHTDATA_ZONE` (secrets), `DIGEST_RECIPIENTS` (variable). Trigger it
-manually via the Actions tab ("workflow_dispatch") or run the same
-command locally:
+`DECODO_USERNAME`, `DECODO_PASSWORD` (secrets), `DIGEST_RECIPIENTS`
+(variable). Or just run the same command locally:
 
 ```bash
 .venv/bin/visa-jobs-digest
