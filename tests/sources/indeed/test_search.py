@@ -37,6 +37,7 @@ def _settings(**overrides: object) -> Settings:
         indeed_posts_per_page=2,
         indeed_max_pages_per_query=3,
         indeed_search_concurrency=5,
+        indeed_min_cards_per_page=2,
     )
     defaults.update(overrides)
     return Settings(**defaults)
@@ -86,14 +87,16 @@ def test_build_search_url_appends_vjk_when_set() -> None:
     assert url.endswith("&vjk=abc123")
 
 
-async def test_fetch_all_job_cards_fetches_every_configured_page_even_after_a_partial_page(
+async def test_fetch_all_job_cards_fetches_every_configured_page_when_none_are_below_threshold(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Unlike LinkedIn, Indeed does NOT stop early on a partial/short page --
-    # a later offset was repeatedly observed to return a full page of
-    # entirely new real postings right after an earlier offset came back
-    # short/empty (see search.py's module docstring). indeed_max_pages_per_query
-    # is 3 by default in _settings(), so all 3 pages must be fetched.
+    # A page that fails to fetch (see the "keeps going past a page that
+    # fails to fetch" test below) doesn't stop pagination -- but a
+    # successful partial page normally does (see the min-cards-per-page
+    # test below). Setting indeed_min_cards_per_page=1 here isolates that
+    # the underlying "fetch every configured page" loop itself has no
+    # other hidden early-exit condition: with every page's card count at
+    # or above this low threshold, all 3 configured pages are fetched.
     pages = [
         _page_html(
             [
@@ -101,8 +104,43 @@ async def test_fetch_all_job_cards_fetches_every_configured_page_even_after_a_pa
                 _card_html("2", "Job 2", "Acme", "New York, NY"),
             ]
         ),
-        _page_html([_card_html("3", "Job 3", "Acme", "New York, NY")]),  # partial page -- no longer stops anything
+        _page_html([_card_html("3", "Job 3", "Acme", "New York, NY")]),
         _page_html([_card_html("4", "Job 4", "Acme", "New York, NY")]),
+    ]
+    call_count = 0
+
+    async def fake_fetch_html(client, url, **kwargs):
+        nonlocal call_count
+        page = pages[call_count]
+        call_count += 1
+        return page
+
+    monkeypatch.setattr("visa_jobs_api.sources.indeed.search.fetch_html", fake_fetch_html)
+
+    settings = _settings(indeed_min_cards_per_page=1)
+    async with httpx.AsyncClient() as client:
+        cards = await fetch_all_job_cards(
+            client, [SearchQuery(keywords="Python", country="United States")], settings=settings, posted_within_hours=24
+        )
+
+    assert len(cards) == 4
+    assert call_count == 3  # all 3 configured pages fetched
+
+
+async def test_fetch_all_job_cards_stops_pagination_after_a_page_below_the_min_cards_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # indeed_min_cards_per_page is 2 by default in _settings() -- a page
+    # with fewer cards than that is treated as the last page of real
+    # results, even though it fetched successfully and has some cards.
+    pages = [
+        _page_html([_card_html("1", "Job 1", "Acme", "New York, NY")]),  # 1 card -- below the threshold of 2
+        _page_html(
+            [
+                _card_html("2", "Job 2", "Acme", "New York, NY"),
+                _card_html("3", "Job 3", "Acme", "New York, NY"),
+            ]
+        ),
     ]
     call_count = 0
 
@@ -120,8 +158,8 @@ async def test_fetch_all_job_cards_fetches_every_configured_page_even_after_a_pa
             client, [SearchQuery(keywords="Python", country="United States")], settings=settings, posted_within_hours=24
         )
 
-    assert len(cards) == 4
-    assert call_count == 3  # all 3 configured pages fetched, despite page 1 being partial
+    assert len(cards) == 1  # the below-threshold page's card is kept
+    assert call_count == 1  # page 1 (the 2-card page) was never requested
 
 
 async def test_fetch_all_job_cards_retries_a_suspicious_empty_page_before_trusting_it(
@@ -225,7 +263,7 @@ async def test_fetch_all_job_cards_records_one_search_call_per_page_fetched(monk
 
     monkeypatch.setattr("visa_jobs_api.sources.indeed.search.fetch_html", fake_fetch_html)
 
-    settings = _settings()
+    settings = _settings(indeed_min_cards_per_page=1)
     stats = CallStats()
     async with httpx.AsyncClient() as client:
         await fetch_all_job_cards(

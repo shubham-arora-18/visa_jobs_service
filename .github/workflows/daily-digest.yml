@@ -42,4 +42,5 @@ jobs:
           LINKEDIN_MAX_PAGES_PER_QUERY: ${{ vars.LINKEDIN_MAX_PAGES_PER_QUERY }}
           INDEED_POSTS_PER_PAGE: ${{ vars.INDEED_POSTS_PER_PAGE }}
           INDEED_MAX_PAGES_PER_QUERY: ${{ vars.INDEED_MAX_PAGES_PER_QUERY }}
+          INDEED_MIN_CARDS_PER_PAGE: ${{ vars.INDEED_MIN_CARDS_PER_PAGE }}
         run: visa-jobs-digest

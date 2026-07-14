@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     indeed_posts_per_page: int = Field(default=10, gt=0)
     indeed_max_pages_per_query: int = Field(default=4, gt=0)
 
+    # A successful page with fewer cards than this is treated as the last
+    # page of real results -- pagination stops rather than trying the next
+    # offset. Indeed-only; see sources/indeed/search.py's module docstring.
+    indeed_min_cards_per_page: int = Field(default=10, gt=0)
+
     # Optional `vjk` (viewed-job-key) query param appended to every Indeed
     # search URL when set -- empty by default (omitted from the URL
     # entirely), since it pins to one specific job posting captured from a
