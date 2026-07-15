@@ -94,6 +94,7 @@ class HnWhoIsHiringSource:
             full_text=candidate.posting_text,
             mentions=candidate.visa_mentions,
             supporting_context=candidate.supporting_replies,
+            model=self._settings.hf_model,
             log_context=f"HN comment {candidate.comment_id}",
         )
         if not verdict.offers_sponsorship:

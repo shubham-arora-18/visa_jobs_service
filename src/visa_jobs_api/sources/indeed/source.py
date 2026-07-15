@@ -117,6 +117,7 @@ class IndeedSource:
                 system_prompt=_SYSTEM_PROMPT,
                 full_text=candidate.description,
                 mentions=mentions,
+                model=self._settings.hf_model,
                 log_context=f"Indeed job {candidate.card.url}",
             )
         except VisaLlmError as exc:

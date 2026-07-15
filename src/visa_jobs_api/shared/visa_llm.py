@@ -31,7 +31,13 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 logger = logging.getLogger(__name__)
 
 HF_ROUTER_BASE_URL = "https://router.huggingface.co/v1"
-DEFAULT_MODEL = "Qwen/Qwen3-4B-Instruct-2507:nscale"
+# nscale rejects this account's HF token with a 401 ("Invalid or expired
+# token") even though the same token works fine against other providers --
+# pointing at nscale specifically not being enabled for the account, not a
+# bad token. featherless-ai serves the same Qwen model and works (verified
+# live: auth succeeds, clean directly-parseable JSON, correct classification
+# across sample postings).
+DEFAULT_MODEL = "Qwen/Qwen3-4B-Instruct-2507:featherless-ai"
 
 RoleGroup = Literal["Frontend", "Backend", "Fullstack", "Other"]
 _VALID_ROLE_GROUPS = {"Frontend", "Backend", "Fullstack", "Other"}

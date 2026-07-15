@@ -69,6 +69,24 @@ async def test_fetch_jobs_uses_the_llms_tech_stack_and_role_group(monkeypatch: p
     assert jobs[0].role_group == "Frontend"
 
 
+async def test_fetch_jobs_passes_the_configured_hf_model_to_the_llm_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    card = _card()
+    candidate = IndeedJobCandidate(card=card, description="We offer visa sponsorship.", language="en")
+
+    monkeypatch.setattr("visa_jobs_api.sources.indeed.source.fetch_all_job_cards", AsyncMock(return_value=[card]))
+    monkeypatch.setattr("visa_jobs_api.sources.indeed.source.fetch_all_descriptions", AsyncMock(return_value=[candidate]))
+    llm_client = _make_llm_client('{"offers_sponsorship": true, "reason": "explicit offer"}')
+    monkeypatch.setattr("visa_jobs_api.sources.indeed.source.build_client", lambda hf_token: llm_client)
+
+    async with httpx.AsyncClient() as http_client:
+        source = IndeedSource(
+            settings=_settings(hf_model="some-org/some-model:some-provider"), http_client=http_client, call_stats=CallStats()
+        )
+        await source.fetch_jobs()
+
+    assert llm_client.chat.completions.create.call_args.kwargs["model"] == "some-org/some-model:some-provider"
+
+
 async def test_fetch_jobs_uses_query_country_not_the_llms_guess(monkeypatch: pytest.MonkeyPatch) -> None:
     # Same deterministic-country reasoning as LinkedIn's source.py: the
     # query's own country is known exactly, unlike an LLM guess.

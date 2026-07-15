@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     gmail_app_password: str
     digest_recipients: str
 
+    # HF Inference Providers model, "model:provider" syntax (see
+    # shared/visa_llm.py). Overridable per-environment since a given
+    # provider can start rejecting a token (e.g. not enabled for the
+    # account) independently of the token itself being valid -- see
+    # DECISIONS.md for the nscale/401 incident this was added after.
+    hf_model: str = Field(default="Qwen/Qwen3-4B-Instruct-2507:featherless-ai")
+
     @field_validator("gmail_app_password")
     @classmethod
     def _strip_app_password_spaces(cls, value: str) -> str:
