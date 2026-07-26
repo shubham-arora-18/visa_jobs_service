@@ -20,17 +20,20 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # Secrets / third-party credentials.
-    hf_token: str
     gmail_address: str
     gmail_app_password: str
     digest_recipients: str
 
-    # HF Inference Providers model, "model:provider" syntax (see
-    # shared/visa_llm.py). Overridable per-environment since a given
-    # provider can start rejecting a token (e.g. not enabled for the
-    # account) independently of the token itself being valid -- see
-    # DECISIONS.md for the nscale/401 incident this was added after.
-    hf_model: str = Field(default="Qwen/Qwen3-4B-Instruct-2507:featherless-ai")
+    # Sponsorship-confirmation LLM, served locally via Docker Model Runner's
+    # OpenAI-compatible API (see shared/visa_llm.py) -- replaced the
+    # Hugging Face Inference Providers router this used to call, to remove
+    # the per-call cost/rate-limit and keep confirmation entirely local; see
+    # DECISIONS.md. Only resolves on a machine actually running Docker Model
+    # Runner with this model loaded (the same Mac scripts/run_digest_locally.sh
+    # already runs the whole digest on), hence overridable rather than
+    # hardcoded.
+    llm_base_url: str = Field(default="http://localhost:12434/engines/llama.cpp/v1")
+    llm_model: str = Field(default="hf.co/unsloth/qwen3-4b-instruct-2507-gguf")
 
     @field_validator("gmail_app_password")
     @classmethod
@@ -41,8 +44,16 @@ class Settings(BaseSettings):
         # and Password not accepted` SMTP auth failure.
         return value.replace(" ", "")
 
+    # Used for LinkedIn's search + description fetches.
     decodo_username: str
     decodo_password: str
+
+    # Used for Indeed's description fetches (Indeed search stays on
+    # Selenium) -- swapped in from Decodo after a live comparison found
+    # Decodo failing a large share of Indeed description fetches (401s and
+    # read timeouts) that Bright Data succeeded on. See DECISIONS.md.
+    brightdata_api_key: str
+    brightdata_zone: str
 
     # Per-stage concurrency caps.
     hn_llm_concurrency: int = Field(default=5, gt=0)

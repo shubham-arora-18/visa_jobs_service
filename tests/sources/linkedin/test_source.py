@@ -16,7 +16,6 @@ from visa_jobs_api.sources.linkedin.source import LinkedInSource
 
 def _settings(**overrides: object) -> Settings:
     defaults: dict[str, object] = dict(
-        hf_token="fake",
         gmail_address="a@b.com",
         gmail_app_password="pw",
         digest_recipients="me@example.com",
@@ -69,7 +68,7 @@ async def test_fetch_jobs_uses_the_llms_tech_stack_and_role_group(monkeypatch: p
         '{"offers_sponsorship": true, "reason": "explicit offer", "country": "Ireland", '
         '"tech_stack": ["React", "Node.js"], "role_group": "Frontend"}'
     )
-    monkeypatch.setattr("visa_jobs_api.sources.linkedin.source.build_client", lambda hf_token: llm_client)
+    monkeypatch.setattr("visa_jobs_api.sources.linkedin.source.build_client", lambda base_url: llm_client)
 
     async with httpx.AsyncClient() as http_client:
         source = LinkedInSource(settings=_settings(), http_client=http_client, call_stats=CallStats())
@@ -88,7 +87,7 @@ async def test_fetch_jobs_confirms_english_candidate_and_uses_query_country(monk
         "visa_jobs_api.sources.linkedin.source.fetch_all_descriptions", AsyncMock(return_value=[candidate])
     )
     llm_client = _make_llm_client('{"offers_sponsorship": true, "reason": "explicit offer", "country": "France"}')
-    monkeypatch.setattr("visa_jobs_api.sources.linkedin.source.build_client", lambda hf_token: llm_client)
+    monkeypatch.setattr("visa_jobs_api.sources.linkedin.source.build_client", lambda base_url: llm_client)
 
     async with httpx.AsyncClient() as http_client:
         source = LinkedInSource(settings=_settings(), http_client=http_client, call_stats=CallStats())
@@ -118,7 +117,7 @@ async def test_fetch_jobs_uses_query_country_even_when_card_location_is_remote_o
         "visa_jobs_api.sources.linkedin.source.fetch_all_descriptions", AsyncMock(return_value=[candidate])
     )
     llm_client = _make_llm_client('{"offers_sponsorship": true, "reason": "explicit offer", "country": "Germany"}')
-    monkeypatch.setattr("visa_jobs_api.sources.linkedin.source.build_client", lambda hf_token: llm_client)
+    monkeypatch.setattr("visa_jobs_api.sources.linkedin.source.build_client", lambda base_url: llm_client)
 
     async with httpx.AsyncClient() as http_client:
         source = LinkedInSource(settings=_settings(), http_client=http_client, call_stats=CallStats())
@@ -136,7 +135,7 @@ async def test_fetch_jobs_skips_llm_when_no_regex_mention_found(monkeypatch: pyt
         "visa_jobs_api.sources.linkedin.source.fetch_all_descriptions", AsyncMock(return_value=[candidate])
     )
     llm_client = _make_llm_client('{"offers_sponsorship": true, "reason": "n/a"}')
-    monkeypatch.setattr("visa_jobs_api.sources.linkedin.source.build_client", lambda hf_token: llm_client)
+    monkeypatch.setattr("visa_jobs_api.sources.linkedin.source.build_client", lambda base_url: llm_client)
 
     async with httpx.AsyncClient() as http_client:
         source = LinkedInSource(settings=_settings(), http_client=http_client, call_stats=CallStats())
@@ -155,7 +154,7 @@ async def test_fetch_jobs_calls_llm_directly_for_non_english_text(monkeypatch: p
         "visa_jobs_api.sources.linkedin.source.fetch_all_descriptions", AsyncMock(return_value=[candidate])
     )
     llm_client = _make_llm_client('{"offers_sponsorship": true, "reason": "confirmed", "country": "Germany"}')
-    monkeypatch.setattr("visa_jobs_api.sources.linkedin.source.build_client", lambda hf_token: llm_client)
+    monkeypatch.setattr("visa_jobs_api.sources.linkedin.source.build_client", lambda base_url: llm_client)
 
     async with httpx.AsyncClient() as http_client:
         source = LinkedInSource(settings=_settings(), http_client=http_client, call_stats=CallStats())
@@ -171,7 +170,7 @@ async def test_fetch_jobs_excludes_cards_outside_the_recency_window(monkeypatch:
     fetch_descriptions_mock = AsyncMock(return_value=[])
     monkeypatch.setattr("visa_jobs_api.sources.linkedin.source.fetch_all_job_cards", AsyncMock(return_value=[old_card]))
     monkeypatch.setattr("visa_jobs_api.sources.linkedin.source.fetch_all_descriptions", fetch_descriptions_mock)
-    monkeypatch.setattr("visa_jobs_api.sources.linkedin.source.build_client", lambda hf_token: MagicMock())
+    monkeypatch.setattr("visa_jobs_api.sources.linkedin.source.build_client", lambda base_url: MagicMock())
 
     async with httpx.AsyncClient() as http_client:
         source = LinkedInSource(settings=_settings(), http_client=http_client, call_stats=CallStats(), posted_within_hours=24)
@@ -201,7 +200,7 @@ async def test_fetch_jobs_skips_a_candidate_whose_llm_call_fails_but_keeps_the_r
     monkeypatch.setattr(
         "visa_jobs_api.sources.linkedin.source.fetch_all_descriptions", AsyncMock(return_value=candidates)
     )
-    monkeypatch.setattr("visa_jobs_api.sources.linkedin.source.build_client", lambda hf_token: MagicMock())
+    monkeypatch.setattr("visa_jobs_api.sources.linkedin.source.build_client", lambda base_url: MagicMock())
 
     async def fake_confirm_visa_offer(*, log_context, **kwargs):
         if "x/1" in log_context:

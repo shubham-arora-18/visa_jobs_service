@@ -12,12 +12,13 @@ from visa_jobs_api.sources.indeed.models import JobCard
 
 def _settings(**overrides: object) -> Settings:
     defaults: dict[str, object] = dict(
-        hf_token="fake",
         gmail_address="a@b.com",
         gmail_app_password="pw",
         digest_recipients="me@example.com",
         decodo_username="decodo-user",
         decodo_password="decodo-pass",
+        brightdata_api_key="brightdata-key",
+        brightdata_zone="brightdata-zone",
         indeed_description_concurrency=5,
     )
     defaults.update(overrides)
@@ -99,3 +100,26 @@ async def test_fetch_all_descriptions_skips_a_card_whose_fetch_fails_but_keeps_t
 
     assert len(candidates) == 1
     assert candidates[0].card.url == "https://www.indeed.com/viewjob?jk=2"
+
+
+async def test_fetch_all_descriptions_fetches_via_brightdata_with_the_mapped_country_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict] = []
+
+    async def fake_fetch_html(client, url, **kwargs):
+        calls.append(kwargs)
+        return '<div id="jobDescriptionText">We offer visa sponsorship.</div>'
+
+    monkeypatch.setattr("visa_jobs_api.sources.indeed.description.fetch_html", fake_fetch_html)
+
+    cards = [_card("https://uk.indeed.com/viewjob?jk=1", query_country="United Kingdom")]
+    async with httpx.AsyncClient() as client:
+        await fetch_all_descriptions(client, cards, settings=_settings())
+
+    assert len(calls) == 1
+    assert calls[0]["via_brightdata"] is True
+    assert calls[0]["brightdata_api_key"] == "brightdata-key"
+    assert calls[0]["brightdata_zone"] == "brightdata-zone"
+    # ISO code, not Indeed's own "uk" domain-naming.
+    assert calls[0]["brightdata_country"] == "gb"

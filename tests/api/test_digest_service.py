@@ -15,7 +15,6 @@ from visa_jobs_api.shared.models import NormalizedJob
 
 def _settings(**overrides: object) -> Settings:
     defaults: dict[str, object] = dict(
-        hf_token="fake",
         gmail_address="a@b.com",
         gmail_app_password="pw",
         digest_recipients="me@example.com,you@example.com",
@@ -145,6 +144,6 @@ async def test_run_digest_logs_the_call_stats_summary_even_on_a_genuine_systemic
         await run_digest(settings=_settings())
 
     assert any(
-        "Selenium (Indeed search) / Decodo (Indeed details, LinkedIn)" in record.getMessage()
+        "Selenium (Indeed search) / Bright Data (Indeed details) / Decodo (LinkedIn)" in record.getMessage()
         for record in caplog.records
     )

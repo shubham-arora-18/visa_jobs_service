@@ -87,7 +87,7 @@ async def test_confirm_visa_offer_coerces_unrecognized_role_group_to_other() -> 
 async def test_confirm_visa_offer_raises_on_api_error() -> None:
     client = _make_client(openai.APIConnectionError(request=MagicMock()))
 
-    with pytest.raises(VisaLlmError, match="HF inference call failed"):
+    with pytest.raises(VisaLlmError, match="LLM inference call failed"):
         await confirm_visa_offer(client=client, system_prompt=_SYSTEM_PROMPT, full_text="text", mentions=[])
 
 

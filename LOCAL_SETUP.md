@@ -35,21 +35,50 @@ Install it normally from google.com/chrome. Selenium 4's built-in
 Selenium Manager auto-downloads a matching chromedriver itself -- no
 separate driver install needed.
 
-## 4. Create `.env`
+## 4. Install Docker Desktop and start the local sponsorship-confirmation LLM
+
+Sponsorship confirmation (`shared/visa_llm.py`) runs against a model
+served locally via Docker Desktop's Model Runner feature, not a hosted
+API -- see `DECISIONS.md`'s "Sponsorship-confirmation LLM moved off
+Hugging Face..." entry for why and how the `docker-compose.yml`
+settings (`context_size`/`runtime_flags: ["--parallel", "8"]`) were
+chosen.
+
+- Install Docker Desktop from docker.com and make sure it's running.
+- Bring up the model (this pulls the ~2.3GB GGUF model on first run,
+  which can take a few minutes):
+
+  ```bash
+  docker compose up -d
+  ```
+- Confirm it's serving:
+
+  ```bash
+  curl http://localhost:12434/engines/llama.cpp/v1/models
+  ```
+
+`scripts/run_digest_locally.sh` does this `docker compose up -d`/
+`docker compose down` automatically around every digest run (see step 6)
+-- this manual step is just to confirm it works once on a new machine.
+
+## 5. Create `.env`
 
 ```bash
 cp .env.example .env
 ```
 
-Fill in real values for `HF_TOKEN`, `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`,
-`DIGEST_RECIPIENTS`, `DECODO_USERNAME`, `DECODO_PASSWORD`. Everything else
-(concurrency caps, pagination limits, `INDEED_PAGE_SETTLE_SECONDS`, etc.)
-has a working default in `config.py` -- only override what you actually
-want different.
+Fill in real values for `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`,
+`DIGEST_RECIPIENTS`, `DECODO_USERNAME`, `DECODO_PASSWORD`,
+`BRIGHTDATA_API_KEY`, `BRIGHTDATA_ZONE`. `LLM_BASE_URL`/`LLM_MODEL`
+already default to the local Docker Model Runner setup from step 4 and
+don't need a real secret. Everything else (concurrency caps, pagination
+limits, `INDEED_PAGE_SETTLE_SECONDS`, etc.) has a working default in
+`config.py` -- only override what you actually want different.
 
-## 5. Test it once manually before automating anything
+## 6. Test it once manually before automating anything
 
 ```bash
+docker compose up -d   # if not already running from step 4
 python3 -m visa_jobs_api.cli
 ```
 
@@ -58,7 +87,7 @@ This also implicitly checks that this machine's IP isn't already
 flagged/on a VPN/corporate network -- the entire reason local runs work at
 all is being on an ordinary residential IP (see `DECISIONS.md`).
 
-## 6. Set up the daily automatic run (launchd)
+## 7. Set up the daily automatic run (launchd)
 
 `scripts/run_digest_locally.sh` and the LaunchAgent `.plist` both hardcode
 this repo's clone path -- on a new machine (different username or clone
@@ -81,7 +110,7 @@ launchctl list | grep visa-jobs-digest
 It's scheduled for 9:00 AM local time. Every run's full output lands in
 its own timestamped file under `logs/` (gitignored).
 
-## 7. (Optional) Investigate the GitHub Actions blocking issue further
+## 8. (Optional) Investigate the GitHub Actions blocking issue further
 
 `.github/workflows/investigate-indeed-blocking.yml` (manual-trigger only)
 and `scripts/diagnose_indeed_blocking.py` exist for picking this

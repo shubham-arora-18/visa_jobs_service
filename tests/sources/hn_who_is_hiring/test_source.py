@@ -16,7 +16,6 @@ from visa_jobs_api.sources.hn_who_is_hiring.source import HnWhoIsHiringSource
 
 def _settings(**overrides: object) -> Settings:
     defaults: dict[str, object] = dict(
-        hf_token="fake",
         gmail_address="a@b.com",
         gmail_app_password="pw",
         digest_recipients="me@example.com",
@@ -70,7 +69,7 @@ async def test_fetch_jobs_returns_only_confirmed_candidates_within_window(monkey
             '"tech_stack": ["Go"], "role_group": "Backend"}'
         )
     )
-    monkeypatch.setattr("visa_jobs_api.sources.hn_who_is_hiring.source.build_client", lambda hf_token: llm_client)
+    monkeypatch.setattr("visa_jobs_api.sources.hn_who_is_hiring.source.build_client", lambda base_url: llm_client)
 
     with respx.mock:
         respx.get(ALGOLIA_SEARCH_URL).mock(
@@ -106,7 +105,7 @@ async def test_fetch_jobs_prefers_regex_detected_tech_stack_over_llm_guess(monke
             '"tech_stack": ["Rust"], "role_group": "Backend"}'
         )
     )
-    monkeypatch.setattr("visa_jobs_api.sources.hn_who_is_hiring.source.build_client", lambda hf_token: llm_client)
+    monkeypatch.setattr("visa_jobs_api.sources.hn_who_is_hiring.source.build_client", lambda base_url: llm_client)
 
     with respx.mock:
         respx.get(ALGOLIA_SEARCH_URL).mock(
@@ -129,7 +128,7 @@ async def test_fetch_jobs_excludes_candidates_the_llm_rejects(monkeypatch: pytes
     llm_client.chat.completions.create = AsyncMock(
         return_value=_mock_completion_returning('{"offers_sponsorship": false, "reason": "unrelated usage"}')
     )
-    monkeypatch.setattr("visa_jobs_api.sources.hn_who_is_hiring.source.build_client", lambda hf_token: llm_client)
+    monkeypatch.setattr("visa_jobs_api.sources.hn_who_is_hiring.source.build_client", lambda base_url: llm_client)
 
     with respx.mock:
         respx.get(ALGOLIA_SEARCH_URL).mock(

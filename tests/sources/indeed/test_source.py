@@ -15,7 +15,6 @@ from visa_jobs_api.sources.indeed.source import IndeedSource
 
 def _settings(**overrides: object) -> Settings:
     defaults: dict[str, object] = dict(
-        hf_token="fake",
         gmail_address="a@b.com",
         gmail_app_password="pw",
         digest_recipients="me@example.com",
@@ -59,7 +58,7 @@ async def test_fetch_jobs_uses_the_llms_tech_stack_and_role_group(monkeypatch: p
         '{"offers_sponsorship": true, "reason": "explicit offer", "country": "United States", '
         '"tech_stack": ["React", "Node.js"], "role_group": "Frontend"}'
     )
-    monkeypatch.setattr("visa_jobs_api.sources.indeed.source.build_client", lambda hf_token: llm_client)
+    monkeypatch.setattr("visa_jobs_api.sources.indeed.source.build_client", lambda base_url: llm_client)
 
     async with httpx.AsyncClient() as http_client:
         source = IndeedSource(settings=_settings(), http_client=http_client, call_stats=CallStats())
@@ -69,22 +68,22 @@ async def test_fetch_jobs_uses_the_llms_tech_stack_and_role_group(monkeypatch: p
     assert jobs[0].role_group == "Frontend"
 
 
-async def test_fetch_jobs_passes_the_configured_hf_model_to_the_llm_call(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_fetch_jobs_passes_the_configured_llm_model_to_the_llm_call(monkeypatch: pytest.MonkeyPatch) -> None:
     card = _card()
     candidate = IndeedJobCandidate(card=card, description="We offer visa sponsorship.", language="en")
 
     monkeypatch.setattr("visa_jobs_api.sources.indeed.source.fetch_all_job_cards", AsyncMock(return_value=[card]))
     monkeypatch.setattr("visa_jobs_api.sources.indeed.source.fetch_all_descriptions", AsyncMock(return_value=[candidate]))
     llm_client = _make_llm_client('{"offers_sponsorship": true, "reason": "explicit offer"}')
-    monkeypatch.setattr("visa_jobs_api.sources.indeed.source.build_client", lambda hf_token: llm_client)
+    monkeypatch.setattr("visa_jobs_api.sources.indeed.source.build_client", lambda base_url: llm_client)
 
     async with httpx.AsyncClient() as http_client:
         source = IndeedSource(
-            settings=_settings(hf_model="some-org/some-model:some-provider"), http_client=http_client, call_stats=CallStats()
+            settings=_settings(llm_model="some-org/some-model"), http_client=http_client, call_stats=CallStats()
         )
         await source.fetch_jobs()
 
-    assert llm_client.chat.completions.create.call_args.kwargs["model"] == "some-org/some-model:some-provider"
+    assert llm_client.chat.completions.create.call_args.kwargs["model"] == "some-org/some-model"
 
 
 async def test_fetch_jobs_uses_query_country_not_the_llms_guess(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -96,7 +95,7 @@ async def test_fetch_jobs_uses_query_country_not_the_llms_guess(monkeypatch: pyt
     monkeypatch.setattr("visa_jobs_api.sources.indeed.source.fetch_all_job_cards", AsyncMock(return_value=[card]))
     monkeypatch.setattr("visa_jobs_api.sources.indeed.source.fetch_all_descriptions", AsyncMock(return_value=[candidate]))
     llm_client = _make_llm_client('{"offers_sponsorship": true, "reason": "explicit offer", "country": "France"}')
-    monkeypatch.setattr("visa_jobs_api.sources.indeed.source.build_client", lambda hf_token: llm_client)
+    monkeypatch.setattr("visa_jobs_api.sources.indeed.source.build_client", lambda base_url: llm_client)
 
     async with httpx.AsyncClient() as http_client:
         source = IndeedSource(settings=_settings(), http_client=http_client, call_stats=CallStats())
@@ -114,7 +113,7 @@ async def test_fetch_jobs_skips_llm_when_no_regex_mention_found(monkeypatch: pyt
     monkeypatch.setattr("visa_jobs_api.sources.indeed.source.fetch_all_job_cards", AsyncMock(return_value=[card]))
     monkeypatch.setattr("visa_jobs_api.sources.indeed.source.fetch_all_descriptions", AsyncMock(return_value=[candidate]))
     llm_client = _make_llm_client('{"offers_sponsorship": true, "reason": "n/a"}')
-    monkeypatch.setattr("visa_jobs_api.sources.indeed.source.build_client", lambda hf_token: llm_client)
+    monkeypatch.setattr("visa_jobs_api.sources.indeed.source.build_client", lambda base_url: llm_client)
 
     async with httpx.AsyncClient() as http_client:
         source = IndeedSource(settings=_settings(), http_client=http_client, call_stats=CallStats())
@@ -131,7 +130,7 @@ async def test_fetch_jobs_excludes_candidates_the_llm_rejects(monkeypatch: pytes
     monkeypatch.setattr("visa_jobs_api.sources.indeed.source.fetch_all_job_cards", AsyncMock(return_value=[card]))
     monkeypatch.setattr("visa_jobs_api.sources.indeed.source.fetch_all_descriptions", AsyncMock(return_value=[candidate]))
     llm_client = _make_llm_client('{"offers_sponsorship": false, "reason": "unable to sponsor"}')
-    monkeypatch.setattr("visa_jobs_api.sources.indeed.source.build_client", lambda hf_token: llm_client)
+    monkeypatch.setattr("visa_jobs_api.sources.indeed.source.build_client", lambda base_url: llm_client)
 
     async with httpx.AsyncClient() as http_client:
         source = IndeedSource(settings=_settings(), http_client=http_client, call_stats=CallStats())
@@ -157,7 +156,7 @@ async def test_fetch_jobs_applies_title_filter_and_dedup(monkeypatch: pytest.Mon
         AsyncMock(return_value=[relevant, irrelevant, duplicate, same_title_other_posting]),
     )
     monkeypatch.setattr("visa_jobs_api.sources.indeed.source.fetch_all_descriptions", fetch_descriptions_mock)
-    monkeypatch.setattr("visa_jobs_api.sources.indeed.source.build_client", lambda hf_token: MagicMock())
+    monkeypatch.setattr("visa_jobs_api.sources.indeed.source.build_client", lambda base_url: MagicMock())
 
     async with httpx.AsyncClient() as http_client:
         source = IndeedSource(settings=_settings(), http_client=http_client, call_stats=CallStats())
@@ -191,7 +190,7 @@ async def test_fetch_jobs_skips_a_candidate_whose_llm_call_fails_but_keeps_the_r
     monkeypatch.setattr(
         "visa_jobs_api.sources.indeed.source.fetch_all_descriptions", AsyncMock(return_value=candidates)
     )
-    monkeypatch.setattr("visa_jobs_api.sources.indeed.source.build_client", lambda hf_token: MagicMock())
+    monkeypatch.setattr("visa_jobs_api.sources.indeed.source.build_client", lambda base_url: MagicMock())
 
     async def fake_confirm_visa_offer(*, log_context, **kwargs):
         if "jk=1" in log_context:

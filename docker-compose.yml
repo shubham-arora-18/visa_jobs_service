@@ -1,0 +1,36 @@
+services:
+  # Placeholder container whose only job is to declare a dependency on the
+  # `llm` model below, so `docker compose up` actually provisions it via
+  # Docker Model Runner -- Compose only starts model resources that some
+  # service references. The digest itself still runs natively on this host
+  # (not in a container), same as before: Indeed search needs a real
+  # Selenium/Chrome session from this machine's residential IP (see
+  # DECISIONS.md), which a containerized run would risk regressing, and
+  # nothing about the LLM-concurrency problem this compose file solves
+  # requires containerizing the app too.
+  llm-anchor:
+    image: alpine:3.20
+    command: ["sleep", "infinity"]
+    models:
+      llm:
+        endpoint_var: LLM_BASE_URL
+        model_var: LLM_MODEL
+
+models:
+  # Same model as the old `docker model package` variant this replaces
+  # (qwen3-4b-visa-jobs:local) -- moved to Compose so the runtime tuning
+  # (parallel slots, context size) is declarative and versioned instead of
+  # a manual CLI incantation. See DECISIONS.md for how these numbers were
+  # chosen: llama.cpp defaults to 4 parallel slots and splits context_size
+  # evenly across them as a *hard per-request ceiling* -- a real live run
+  # at 4096 tokens/slot (49152/12) got one genuine `400`: "request (4115
+  # tokens) exceeds the available context size (4096 tokens)" for one
+  # unusually long job description. 6144 tokens/slot (73728/12) gives real
+  # headroom above every prompt size actually observed across live runs
+  # (verified clean end to end afterward). 12 slots covers the app's real
+  # worst-case concurrent LLM call count (8 LinkedIn + 7 Indeed + 5 HN =
+  # 20, most of which overlaps in practice) with no queuing.
+  llm:
+    model: hf.co/unsloth/qwen3-4b-instruct-2507-gguf
+    context_size: 73728
+    runtime_flags: ["--parallel", "12"]

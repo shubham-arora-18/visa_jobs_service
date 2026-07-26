@@ -3,14 +3,21 @@
 The regex heuristic in visa_keywords.py is a cheap first pass that
 over-selects (e.g. it can't tell "sponsored by prominent executives" from a
 real visa offer). This module re-checks each regex-flagged candidate with a
-small LLM call via Hugging Face's Inference Providers router, keeping only
-genuine offers -- and, in the same call, asks for a best-effort country
-guess, a tech-stack guess, and a role-group classification (see
-_ADDITIONAL_FIELDS_INSTRUCTION), so sources with unstructured/absent
-location or tech-stack signal (e.g. HN's freeform posting headers, or
-LinkedIn, which has no regex-based tech detection at all) can still be
-grouped and labeled without a second LLM round-trip. Not a guarantee either
-way -- results should be spot-checked, not treated as authoritative.
+small LLM call, keeping only genuine offers -- and, in the same call, asks
+for a best-effort country guess, a tech-stack guess, and a role-group
+classification (see _ADDITIONAL_FIELDS_INSTRUCTION), so sources with
+unstructured/absent location or tech-stack signal (e.g. HN's freeform
+posting headers, or LinkedIn, which has no regex-based tech detection at
+all) can still be grouped and labeled without a second LLM round-trip. Not
+a guarantee either way -- results should be spot-checked, not treated as
+authoritative.
+
+The model is served locally via Docker Model Runner's OpenAI-compatible API
+(see config.Settings.llm_base_url/llm_model) rather than a hosted provider
+-- moved off Hugging Face's Inference Providers router to remove the
+per-call cost/rate-limit and keep confirmation entirely local; see
+DECISIONS.md. Docker Model Runner doesn't check the API key at all, so
+`build_client`'s api_key is a meaningless placeholder, not a real secret.
 
 Each source supplies only its own domain-specific screening criteria as
 `system_prompt`; this module owns the output-format contract (the JSON
@@ -30,14 +37,11 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 logger = logging.getLogger(__name__)
 
-HF_ROUTER_BASE_URL = "https://router.huggingface.co/v1"
-# nscale rejects this account's HF token with a 401 ("Invalid or expired
-# token") even though the same token works fine against other providers --
-# pointing at nscale specifically not being enabled for the account, not a
-# bad token. featherless-ai serves the same Qwen model and works (verified
-# live: auth succeeds, clean directly-parseable JSON, correct classification
-# across sample postings).
-DEFAULT_MODEL = "Qwen/Qwen3-4B-Instruct-2507:featherless-ai"
+# Docker Model Runner ignores this value entirely (no auth check) -- it's
+# only set because AsyncOpenAI requires a non-empty api_key.
+_LOCAL_PLACEHOLDER_API_KEY = "docker-model-runner"
+
+DEFAULT_MODEL = "hf.co/unsloth/qwen3-4b-instruct-2507-gguf"
 
 RoleGroup = Literal["Frontend", "Backend", "Fullstack", "Other"]
 _VALID_ROLE_GROUPS = {"Frontend", "Backend", "Fullstack", "Other"}
@@ -97,8 +101,8 @@ class VisaLlmError(RuntimeError):
     """Raised when the LLM call fails or its response doesn't match the expected schema."""
 
 
-def build_client(*, hf_token: str) -> AsyncOpenAI:
-    return AsyncOpenAI(base_url=HF_ROUTER_BASE_URL, api_key=hf_token)
+def build_client(*, base_url: str) -> AsyncOpenAI:
+    return AsyncOpenAI(base_url=base_url, api_key=_LOCAL_PLACEHOLDER_API_KEY)
 
 
 def _build_user_prompt(*, full_text: str, mentions: list[str], supporting_context: list[str]) -> str:
@@ -144,11 +148,11 @@ async def confirm_visa_offer(
             temperature=0,
         )
     except openai.OpenAIError as exc:
-        raise VisaLlmError(f"HF inference call failed{context_suffix}") from exc
+        raise VisaLlmError(f"LLM inference call failed{context_suffix}") from exc
 
     content = completion.choices[0].message.content
     if not content:
-        raise VisaLlmError(f"HF inference call returned an empty response{context_suffix}")
+        raise VisaLlmError(f"LLM inference call returned an empty response{context_suffix}")
 
     try:
         raw_verdict = json.loads(content)
