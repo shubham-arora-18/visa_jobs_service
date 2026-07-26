@@ -61,7 +61,7 @@ class HnWhoIsHiringSource:
     ) -> None:
         self._settings = settings
         self._http_client = http_client
-        self._llm_client = build_client(hf_token=settings.hf_token)
+        self._llm_client = build_client(base_url=settings.llm_base_url)
         self._posted_within_hours = posted_within_hours
 
     async def fetch_jobs(self) -> list[NormalizedJob]:
@@ -94,6 +94,7 @@ class HnWhoIsHiringSource:
             full_text=candidate.posting_text,
             mentions=candidate.visa_mentions,
             supporting_context=candidate.supporting_replies,
+            model=self._settings.llm_model,
             log_context=f"HN comment {candidate.comment_id}",
         )
         if not verdict.offers_sponsorship:

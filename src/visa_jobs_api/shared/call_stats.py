@@ -5,8 +5,8 @@ through both the LinkedIn and Indeed sources -- not kept as module-level
 global state, so counts from one digest run never leak into another
 (concurrent API requests, repeated test runs). Indeed's search calls go
 through Selenium/headless Chrome (see sources/indeed/selenium_client.py);
-every other call type (Indeed description, LinkedIn search + description)
-goes through Decodo.
+Indeed's description calls go through Bright Data; LinkedIn's search +
+description calls go through Decodo.
 
 Deliberately scoped to exactly the four call types requested: search-page
 and description-page fetches for each source. LLM confirmation calls go
@@ -21,7 +21,7 @@ from collections import defaultdict
 
 
 class CallStats:
-    """Counts Selenium (Indeed search) and Decodo (everything else) calls per query country."""
+    """Counts Selenium (Indeed search), Bright Data (Indeed description), and Decodo (LinkedIn) calls per query country."""
 
     def __init__(self) -> None:
         self.indeed_search_calls: dict[str, int] = defaultdict(int)
@@ -48,11 +48,11 @@ class CallStats:
             | set(self.linkedin_search_calls)
             | set(self.linkedin_description_calls)
         )
-        log.info("Selenium (Indeed search) / Decodo (Indeed details, LinkedIn) API calls by country:")
+        log.info("Selenium (Indeed search) / Bright Data (Indeed details) / Decodo (LinkedIn) API calls by country:")
         for country in countries:
             log.info(
                 "%s: Selenium calls for Indeed job card: %d  "
-                "Decodo API calls for Indeed job details: %d  "
+                "Bright Data API calls for Indeed job details: %d  "
                 "Decodo API calls for LinkedIn job card: %d  "
                 "Decodo API calls for LinkedIn job details: %d",
                 country,

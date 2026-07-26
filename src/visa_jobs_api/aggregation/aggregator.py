@@ -28,6 +28,13 @@ logger = logging.getLogger(__name__)
 
 _REMOTE_OR_UNSPECIFIED = "Remote / Unspecified"
 
+# NormalizedJob.source -> human-readable label for the digest email.
+_SOURCE_LABELS = {
+    "linkedin": "LinkedIn",
+    "indeed": "Indeed",
+    "hn_who_is_hiring": "HN",
+}
+
 
 class SourceFailure(NamedTuple):
     """One source that didn't complete this run, and why."""
@@ -176,12 +183,14 @@ def _render_country_section(country: str, jobs: list[NormalizedJob]) -> str:
     for job in jobs:
         tech = ", ".join(job.tech_stack) if job.tech_stack else "not mentioned"
         date_label = job.posted_at.strftime("%b %d, %Y")
+        source_label = _SOURCE_LABELS.get(job.source, job.source)
         parts.append(
             '<li style="margin-bottom:14px;line-height:1.4;">'
             f'<a href="{html.escape(job.url)}" style="color:#1a73e8;text-decoration:none;font-weight:600;">'
             f"{html.escape(job.title)}</a> &mdash; {html.escape(job.company)}<br>"
             f'<span style="color:#555;font-size:13px;">Posted: {date_label} &middot; '
-            f'{html.escape(job.location_label)} &middot; {html.escape(job.role_group)}</span><br>'
+            f'{html.escape(job.location_label)} &middot; {html.escape(job.role_group)} &middot; '
+            f'Source: {html.escape(source_label)}</span><br>'
             f'<span style="color:#333;">Tech: {html.escape(tech)}</span><br>'
             f'<span style="color:#777;font-style:italic;">&ldquo;{html.escape(job.visa_reason)}&rdquo;</span>'
             "</li>"

@@ -33,7 +33,6 @@ def _page_html(cards: list[str]) -> str:
 
 def _settings(**overrides: object) -> Settings:
     defaults: dict[str, object] = dict(
-        hf_token="fake",
         gmail_address="a@b.com",
         gmail_app_password="pw",
         digest_recipients="me@example.com",

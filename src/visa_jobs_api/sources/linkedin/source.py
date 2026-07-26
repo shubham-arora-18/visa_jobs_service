@@ -62,7 +62,7 @@ class LinkedInSource:
     ) -> None:
         self._settings = settings
         self._http_client = http_client
-        self._llm_client = build_client(hf_token=settings.hf_token)
+        self._llm_client = build_client(base_url=settings.llm_base_url)
         self._keywords = keywords
         self._posted_within_hours = posted_within_hours
         self._call_stats = call_stats
@@ -115,6 +115,7 @@ class LinkedInSource:
                 system_prompt=_SYSTEM_PROMPT,
                 full_text=candidate.description,
                 mentions=mentions,
+                model=self._settings.llm_model,
                 log_context=f"LinkedIn job {candidate.card.url}",
             )
         except VisaLlmError as exc:

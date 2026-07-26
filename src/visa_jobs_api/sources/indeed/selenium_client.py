@@ -32,7 +32,6 @@ import logging
 import time
 
 from selenium import webdriver
-from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.chrome.options import Options
 
 logger = logging.getLogger(__name__)
@@ -79,7 +78,16 @@ def _fetch_sync(url: str, *, page_settle_seconds: float) -> tuple[str, str]:
         # the same approach validated live in indeed_scraper_experiment.
         time.sleep(page_settle_seconds)
         return driver.page_source, driver.current_url
-    except (TimeoutException, WebDriverException) as exc:
+    except Exception as exc:
+        # Deliberately broad, not just (TimeoutException, WebDriverException):
+        # a hung/slow page load can surface as a raw urllib3.ReadTimeoutError
+        # from the local chromedriver session instead (confirmed live -- see
+        # digest_2026-07-24_09-51-45.log), which Selenium does not wrap into
+        # either of those. Every caller of fetch_html_via_selenium relies on
+        # SeleniumFetchError specifically to skip just the one page/query and
+        # keep going (see search.py) -- letting a raw exception type through
+        # here bypasses that and previously took down the whole Indeed source
+        # for the run over a single slow page.
         raise SeleniumFetchError(f"failed to load {url!r} via Selenium: {exc}") from exc
     finally:
         driver.quit()

@@ -35,7 +35,6 @@ def _page_html(cards: list[str], *, nav: str = _NAV_WITH_NO_MORE_PAGES) -> str:
 
 def _settings(**overrides: object) -> Settings:
     defaults: dict[str, object] = dict(
-        hf_token="fake",
         gmail_address="a@b.com",
         gmail_app_password="pw",
         digest_recipients="me@example.com",

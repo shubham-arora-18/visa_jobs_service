@@ -642,3 +642,181 @@ testing) -- the digest is being run locally instead via
 `scripts/run_digest_locally.sh`, scheduled through a macOS launchd
 LaunchAgent, until Indeed search can run from GitHub Actions without being
 blocked.
+
+## Indeed description fetches switched back from Decodo to Bright Data
+
+Production logs (`logs/digest_2026-07-18_09-16-15.log` and others) showed a
+steady stream of `Failed to fetch description for ... -- skipping this
+job: failed to fetch ... after retries` errors for Indeed, even with
+Decodo's JS-rendered mode (`headless="html"`) that had previously tested
+clean. A live side-by-side comparison was run to check whether Bright Data
+would do better:
+
+- First pass (cloud-run, 8 URLs that had just failed via Decodo): Bright
+  Data recovered 5/8 with real content; the other 3 were a mix of read
+  timeouts and one 502.
+- A follow-up 10-URL run (fresh URLs, same cloud environment) initially
+  showed Bright Data at 0/10 -- but every response was a `200` with an
+  empty body, and the response headers showed why:
+  `x-brd-err-code: client_10050` / `ip_blacklisted` -- the cloud run's
+  source IP was blocked in the Bright Data zone's own access-control
+  settings (`linkedin_unlocker` zone), a zone-config issue, not a real
+  scraping failure. That 0% number was discarded rather than reported as a
+  real reliability figure -- see scripts/compare_decodo_brightdata.py,
+  written so the same comparison could be re-run locally (off whatever
+  cloud IP triggered the blacklist) after removing the IP from that list.
+- Meanwhile the same 10-URL set run against Decodo (no retries, single
+  attempt) came back only 2/10 successful: 3 upstream 401s (Indeed itself
+  blocking the request) and 5 read timeouts.
+
+Decodo's poor showing here, plus the first pass's clean Bright Data
+recovery rate once the IP-blacklist confound is set aside, was enough for
+the user to decide directly: move Indeed's description fetches back to
+Bright Data, keeping Decodo for LinkedIn (which has had no comparable
+reliability complaints). Indeed's *search* pages stay on Selenium either
+way -- this only affects `sources/indeed/description.py`.
+
+Implementation: `shared/http.py` gained `_get_via_brightdata` alongside
+the existing `_get_via_decodo`, with the same retry/backoff policy and the
+same "empty body is an error, not empty content" guard the IP-blacklist
+incident above showed was necessary. Bright Data requires an explicit
+`country` geo-pin param (Decodo's Indeed mode didn't) --
+`sources/indeed/country_domains.py` gained `BRIGHTDATA_COUNTRY_CODES`
+(ISO 3166-1 alpha-2 codes; note `"gb"` for the United Kingdom, not
+Indeed's own domain-naming `"uk"`) for this. New required settings:
+`brightdata_api_key`/`brightdata_zone` (`BRIGHTDATA_API_KEY`/
+`BRIGHTDATA_ZONE`), wired through `.env`, `.env.example`, and
+`daily-digest.yml`'s secrets. Reused the existing `linkedin_unlocker`
+Bright Data zone (the same one `indeed_scraper_experiment` and this
+comparison script used) rather than provisioning a new one -- the name is
+a naming artifact from that zone's original purpose, not a functional
+restriction; worth renaming in the Bright Data dashboard for clarity, but
+not required for this to work.
+
+**Not resolved by this change**: neither provider was 100% reliable in
+testing (Bright Data still had timeouts, Decodo still had genuine
+Indeed-side 401s) -- this reduces the loss rate, it doesn't eliminate it.
+A Decodo-then-Bright-Data fallback per job (try one, fall back to the
+other on failure) was discussed as a further improvement but not
+implemented in this pass, since the user asked specifically for a
+provider swap, not a fallback chain.
+
+## Sponsorship-confirmation LLM moved off Hugging Face to a local Docker Model Runner instance
+
+`shared/visa_llm.py` called Hugging Face's Inference Providers router
+(`router.huggingface.co`) for every sponsorship-confirmation call across
+all three sources. You decided to move this fully local instead -- no more
+per-call cost/rate-limit dependency on a hosted provider -- using Docker
+Desktop's Model Runner feature to serve the same Qwen3-4B-Instruct-2507
+model on this machine.
+
+**vllm backend crashes on this Mac.** The exact HF repo you'd pulled
+(`hf.co/Qwen/Qwen3-4B-Instruct-2507`, raw BF16 safetensors) is tagged for
+Docker Model Runner's `vllm` backend, not `llama.cpp`, in Docker's own
+catalog. `vllm-metal` (the Apple Silicon Metal backend for vllm) fails at
+engine-core initialization on this machine every time
+(`RuntimeError: Engine core initialization failed`) -- a Docker Desktop/
+macOS-Metal compatibility issue, not something fixable from this codebase.
+Switched instead to `hf.co/unsloth/Qwen3-4B-Instruct-2507-GGUF`, a GGUF
+build of the same model tagged for `llama.cpp`, which is confirmed stable
+here.
+
+**Default context size caused a GPU OOM.** The GGUF model's metadata
+advertises a 262144-token max context, and `docker model run`/the REST API
+reserve that much KV cache by default -- a ~39GB allocation, which failed
+with `ggml_metal_synchronize: error: ... Insufficient Memory
+(kIOGPUCommandBufferCallbackErrorOutOfMemory)` on a 48GB Mac already under
+memory pressure from other apps. Fixed with `docker model package --from
+<model> --context-size <n> <new-tag>`, which repackages a local variant
+with a smaller, explicit context size -- this is how `qwen3-4b-visa-jobs:local`
+was created. (Superseded by the docker-compose setup below, which replaced
+this CLI-packaged tag with `hf.co/unsloth/qwen3-4b-instruct-2507-gguf`
+served directly with the same context/parallel tuning declared in
+`docker-compose.yml` instead.)
+
+**Context-per-slot sizing caused real-run 500s.** An initial repackage at
+8192 tokens total passed a synthetic short-prompt smoke test, but a full
+live digest run produced repeated `500 Internal Server Error`s from the
+local server and 11 LinkedIn jobs silently dropped after retries were
+exhausted. Root cause, confirmed via the llama-server logs: Docker Model
+Runner's llama.cpp backend defaults to 4 parallel request slots, and
+splits the total context size evenly across them -- so 8192 total meant
+each slot only got 2048 tokens, and real job descriptions (plus the system
+prompt and JSON-schema instruction) routinely ran 1500-3000+ tokens,
+overflowing a slot under concurrent load. There's no `--parallel`/slot-count
+flag exposed via `docker model package` to reduce the slot count instead,
+so the fix was to repackage with a larger total context (16384, i.e.
+4096/slot) -- confirmed via a synthetic concurrent test using realistic
+~2500-3000 token prompts (20/20 succeeded at 16384, where the same test
+reliably 500'd some requests at 8192).
+
+**Not tested**: this only works on a machine actually running Docker Model
+Runner with this model loaded -- i.e. the same Mac `scripts/run_digest_locally.sh`
+already runs the whole digest on. `daily-digest.yml`'s `workflow_dispatch`
+trigger will now fail on the LLM confirmation step if run manually from
+GitHub Actions, on top of the pre-existing Indeed/Selenium IP-blocking
+issue that already made it not viable for the scheduled run.
+
+## Local LLM moved from a manual `docker model package` CLI step to `docker-compose.yml`, with concurrency doubled
+
+The `docker model package --context-size <n> <tag>` step above worked but
+was an untracked, manual, one-off CLI incantation -- nothing in the repo
+recreated it on a fresh machine, and there was no lever to reduce llama.cpp's
+default 4 parallel slots (only total context size) short of hand-editing a
+`--parallel` flag nobody could discover from `docker model`'s CLI help.
+
+**`docker compose`'s native `models:` top-level key solves both.** Compose
+(v5.1.4 here) supports declaring a model resource with `context_size` and
+`runtime_flags`, backed by the same Docker Model Runner used before (still
+a native, Metal-accelerated host process, not a containerized one -- see
+the note in `docker-compose.yml` about why the app itself isn't
+containerized). `docker-compose.yml`'s `llm` model declares
+`runtime_flags: ["--parallel", "12"]` (you asked for 12 specifically) and
+`context_size: 73728` (6144 tokens/slot). A placeholder `llm-anchor`
+service (tiny `alpine`, `sleep infinity`) exists solely so `docker compose
+up` has something that references the `llm` model and therefore actually
+provisions it -- Compose only starts model resources some service depends
+on.
+
+**Getting to 12 slots safely took two more real-run iterations.** An
+intermediate 8-slot/32768-context config (4096 tokens/slot, matching the
+per-slot budget already validated in the CLI-packaged version) passed a
+synthetic concurrent test cleanly, but a full live digest run still
+dropped 1 LinkedIn job to a genuine error -- not a 500 this time, a `400`:
+`request (4115 tokens) exceeds the available context size (4096 tokens)`.
+Root cause: context_size split evenly across parallel slots is a *hard
+per-request ceiling*, not just a throughput knob -- any single prompt
+(system prompt + job description + JSON-schema instruction) larger than
+its slot's share gets rejected outright, independent of how much total
+memory or how many other slots are idle. Checking `llama-server`'s own
+`prompt eval time` logs across that run showed most real prompts land
+2000-3000 tokens, but with at least one spike past 4100 -- so a per-slot
+budget that only just covers the *typical* case will eventually reject
+the *outlier* case. Fixed by widening to 6144 tokens/slot (73728 total,
+still 12 slots) -- confirmed with both a full live digest run (0 LLM
+failures) and a synthetic stress test deliberately sized above the
+original failure (12 concurrent requests at ~5500-6000 tokens each, all
+succeeded).
+
+Confirmed via `ps` that `llama-server` actually launches with
+`--ctx-size 73728 --parallel 12` under this setup. Memory checked under
+load (`top`): `llama-server` RSS grew from ~13.4GB idle to ~15.8GB under
+the stress test, system down to ~100MB "unused" on this 48GB Mac (other
+apps' baseline usage is high, and macOS reports very little "unused" as
+normal steady-state behavior since it aggressively uses spare RAM for
+reclaimable disk cache/compression) -- no crashes or OOMs observed at this
+size. Pushing further (16+ slots) was not attempted given how little
+headroom remained.
+
+**One naming consequence**: Compose provisions the model directly under
+its full pull reference, `hf.co/unsloth/qwen3-4b-instruct-2507-gguf` --
+there's no equivalent to `docker model package`'s custom local tag inside
+a Compose-managed model. `config.Settings.llm_model`/`shared/visa_llm.py`'s
+`DEFAULT_MODEL`/`.env`/`.env.example` were all updated from the old
+`qwen3-4b-visa-jobs:local` tag to this one accordingly.
+
+`scripts/run_digest_locally.sh` now runs `docker compose up -d` before the
+digest and `docker compose down` after (regardless of the digest's own
+exit code, via a trap, so a mid-run failure doesn't leave the model
+running indefinitely) -- see `LOCAL_SETUP.md` for the updated one-time
+setup steps.
