@@ -1,7 +1,7 @@
 """Fetches and parses a single Indeed job posting's full description page.
 
 Goes through Bright Data's Web Unlocker, geo-pinned per query country
-(`BRIGHTDATA_COUNTRY_CODES`) -- this used to go through Decodo's
+(`ISO_COUNTRY_CODES`) -- this used to go through Decodo's
 JS-rendered mode instead, but a live side-by-side comparison (10 identical
 URLs against each provider, single attempt, no retries) found Decodo
 failing a large share of these fetches (401s and read timeouts) that
@@ -34,7 +34,7 @@ from visa_jobs_api.config import Settings
 from visa_jobs_api.shared.call_stats import CallStats
 from visa_jobs_api.shared.concurrency import gather_limited
 from visa_jobs_api.shared.http import FetchError, fetch_html
-from visa_jobs_api.sources.indeed.country_domains import BRIGHTDATA_COUNTRY_CODES
+from visa_jobs_api.sources.indeed.country_domains import ISO_COUNTRY_CODES
 from visa_jobs_api.sources.indeed.models import IndeedJobCandidate, JobCard
 
 logger = logging.getLogger(__name__)
@@ -65,7 +65,7 @@ async def _fetch_one_description(
             via_brightdata=True,
             brightdata_api_key=settings.brightdata_api_key,
             brightdata_zone=settings.brightdata_zone,
-            brightdata_country=BRIGHTDATA_COUNTRY_CODES[card.query_country],
+            brightdata_country=ISO_COUNTRY_CODES[card.query_country],
         )
     except FetchError as exc:
         logger.error("Failed to fetch description for %s -- skipping this job: %s", card.url, exc)

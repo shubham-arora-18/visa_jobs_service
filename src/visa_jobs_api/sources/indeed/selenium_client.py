@@ -14,11 +14,23 @@ search specifically, confirmed live (see indeed_scraper_experiment/DECISIONS.md)
   Search.py needs this per-query vjk to build every subsequent page's URL.
 - A real browser, hitting Indeed directly with no proxy at all, was not
   blocked in any of dozens of live test requests -- unlike a raw direct
-  fetch (client-side Cloudflare bot-detection, HTTP 403). Whether this
-  holds under GitHub Actions' runner IPs specifically (vs. the
-  residential/office IP this was validated from) is untested -- worth
-  watching the scheduled run's logs for a regression back to
-  blocked/empty pages.
+  fetch (client-side Cloudflare bot-detection, HTTP 403). This only ever
+  confirmed live from a residential/office IP, though -- see below for why
+  that stopped being a hard requirement.
+
+Optional residential-proxy support (`ProxyConfig`/Settings.indeed_selenium_
+proxy_*): a real, JS-executing Chrome session routed through a residential
+proxy (DataImpulse) gets through cleanly too, most of the time -- see
+DECISIONS.md for the live success-rate sample and for why this deliberately
+does NOT try to match the proxy's exit country to the Indeed domain being
+queried (an earlier username/country-suffix-based version of this did;
+that's gone). The proxy just hands out whatever country is in its
+"Default Targeting" pool, randomly, same for every query regardless of
+which Indeed country site it's hitting -- by design, not an oversight. That
+simplification is also what makes this just a plain, unauthenticated
+`--proxy-server` flag (the IP this runs from is whitelisted on the proxy
+provider's side) instead of needing a Chrome extension or any other
+workaround for authenticated-proxy support.
 
 Selenium's WebDriver calls are all synchronous/blocking; fetch_html_via_selenium
 wraps them in asyncio.to_thread so a slow page load doesn't stall the event
@@ -30,6 +42,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import dataclass
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -49,7 +62,23 @@ class SeleniumFetchError(RuntimeError):
     """Raised when a URL can't be loaded through Selenium/Chrome."""
 
 
-def _build_driver() -> webdriver.Chrome:
+@dataclass(frozen=True)
+class ProxyConfig:
+    """A residential-proxy endpoint for Selenium's traffic. See module docstring.
+
+    No credentials -- this relies on the proxy provider whitelisting the
+    machine's own outbound IP instead of username/password auth (Chrome has
+    no `--proxy-server=http://user:pass@host:port` support for authenticated
+    proxies from the command line, and this app doesn't need per-request
+    country targeting, so there was no reason to build the Chrome-extension
+    workaround that *would* need for that).
+    """
+
+    host: str
+    port: int
+
+
+def _build_driver(*, proxy: ProxyConfig | None) -> webdriver.Chrome:
     options = Options()
     options.add_argument("--headless=new")
     options.add_argument("--disable-blink-features=AutomationControlled")
@@ -59,10 +88,15 @@ def _build_driver() -> webdriver.Chrome:
     # refuses to start otherwise.
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
+    # Only the HTML/DOM is ever read -- images cost real bandwidth (and
+    # real money on a metered residential proxy) for zero benefit here.
+    options.add_experimental_option("prefs", {"profile.managed_default_content_settings.images": 2})
+    if proxy is not None:
+        options.add_argument(f"--proxy-server=http://{proxy.host}:{proxy.port}")
     return webdriver.Chrome(options=options)
 
 
-def _fetch_sync(url: str, *, page_settle_seconds: float) -> tuple[str, str]:
+def _fetch_sync(url: str, *, page_settle_seconds: float, proxy: ProxyConfig | None) -> tuple[str, str]:
     """Loads `url`, waits for its JS to settle, returns (html, current_url).
 
     current_url reflects any client-side URL mutation (e.g. `vjk` being
@@ -70,7 +104,7 @@ def _fetch_sync(url: str, *, page_settle_seconds: float) -> tuple[str, str]:
     alone wouldn't show that, only reading current_url after the settle
     wait does.
     """
-    driver = _build_driver()
+    driver = _build_driver(proxy=proxy)
     try:
         driver.get(url)
         # Selenium has no built-in "wait for a client-side JS URL mutation"
@@ -93,6 +127,8 @@ def _fetch_sync(url: str, *, page_settle_seconds: float) -> tuple[str, str]:
         driver.quit()
 
 
-async def fetch_html_via_selenium(url: str, *, page_settle_seconds: float) -> tuple[str, str]:
+async def fetch_html_via_selenium(
+    url: str, *, page_settle_seconds: float, proxy: ProxyConfig | None = None
+) -> tuple[str, str]:
     """Async wrapper around _fetch_sync -- see its docstring for return shape."""
-    return await asyncio.to_thread(_fetch_sync, url, page_settle_seconds=page_settle_seconds)
+    return await asyncio.to_thread(_fetch_sync, url, page_settle_seconds=page_settle_seconds, proxy=proxy)

@@ -34,11 +34,59 @@ from bs4 import BeautifulSoup, Tag
 
 from visa_jobs_api.sources.indeed.models import JobCard
 
+# An earlier version of this classification parsed Indeed's <title> for a
+# leading result count (e.g. "0 Python Backend ... Jobs - 26 July 2026 |
+# Indeed"), on the theory that a bot-block/CAPTCHA interstitial can't
+# dynamically render the query keywords into a title the way a real page
+# does. Confirmed live against ~20 real fetches across all 8 countries
+# (see DECISIONS.md) that this gave false positives: Indeed uses at least
+# 5 different real-page title templates depending on market/query (e.g.
+# "... (with Salaries) | Indeed Australia", "$65K-$121K ... | Indeed" with
+# a salary range instead of a count, "... | Indeed" for UAE) -- most of
+# which have no leading count at all, so a real, fully-rendered zero-result
+# page was being misclassified as "likely blocked" purely because its
+# title didn't match one specific template.
+#
+# Replaced with structural checks on the page body instead, both confirmed
+# live to be reliable across every sample gathered:
+# - `_SEARCH_CHROME_MARKER` (the search box's own input field) is present
+#   on every genuine Indeed search page seen, with 0 or many results alike,
+#   and absent on a real captured Cloudflare Turnstile challenge page (39KB,
+#   no Indeed content at all beyond the challenge JS).
+# - `_ZERO_RESULT_MARKERS` are Indeed's own embedded client-state fields
+#   (`"originalResultCount":0`/`"jobCountInfo":"No Result"`) confirmed
+#   present, byte-identical, on every genuine zero-result page regardless
+#   of which title template it used -- far more stable than scraping
+#   rendered, potentially-localized text.
+_SEARCH_CHROME_MARKER = 'id="text-input-what"'
+_ZERO_RESULT_MARKERS = ('"originalResultCount":0', '"jobCountInfo":"No Result"')
+
 
 def has_additional_pages(html: str) -> bool:
     """Whether this page's pagination nav advertises any further page at all."""
     soup = BeautifulSoup(html, "html.parser")
     return bool(soup.select('a[data-testid^="pagination-page-"]'))
+
+
+def page_title(html: str) -> str:
+    """The page's <title> text, or "" if absent. Purely for human-readable
+    log context now -- see is_genuine_indeed_page/is_confirmed_zero_result
+    for the actual block-vs-zero classification."""
+    soup = BeautifulSoup(html, "html.parser")
+    return soup.title.get_text(strip=True) if soup.title else ""
+
+
+def is_genuine_indeed_page(html: str) -> bool:
+    """Whether this looks like an actually-rendered Indeed search page at
+    all (its own search-box input present), as opposed to a bot-block/
+    CAPTCHA interstitial or an unrelated redirect (e.g. a login page)."""
+    return _SEARCH_CHROME_MARKER in html
+
+
+def is_confirmed_zero_result(html: str) -> bool:
+    """Whether Indeed's own embedded client state confirms zero results for
+    this query -- a genuine zero, not a parsing/selector problem."""
+    return any(marker in html for marker in _ZERO_RESULT_MARKERS)
 
 
 def parse_job_cards(html: str, *, domain: str, query_country: str) -> list[JobCard]:
