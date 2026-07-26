@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -55,6 +55,36 @@ class Settings(BaseSettings):
     brightdata_api_key: str
     brightdata_zone: str
 
+    # Optional residential proxy for Indeed's Selenium-driven *search*
+    # fetches (unlike the settings above, this doesn't touch description
+    # fetches). Both unset (the default) means Selenium connects directly,
+    # unproxied -- the original setup, which only works from a
+    # residential/office IP (this machine's own). Confirmed live that a
+    # real residential proxy (DataImpulse) routing Selenium's traffic also
+    # gets through cleanly most of the time -- see selenium_client.py and
+    # DECISIONS.md -- which is what makes this worth having at all: it's
+    # the one thing that could let Indeed search run from a non-residential
+    # machine (e.g. GitHub Actions) instead of being tied to this Mac
+    # specifically. No username/password: auth is via the proxy provider
+    # whitelisting this machine's own outbound IP instead, and this
+    # deliberately does not target a specific exit country per request --
+    # see selenium_client.py's docstring for why.
+    indeed_selenium_proxy_host: str | None = None
+    indeed_selenium_proxy_port: int | None = None
+
+    @model_validator(mode="after")
+    def _proxy_settings_are_all_or_nothing(self) -> Settings:
+        # A partially-set proxy config (e.g. host set but port missing)
+        # would otherwise surface as a confusing failure deep inside
+        # selenium_client.py the next time Indeed search runs, rather than
+        # a clear error at startup.
+        proxy_fields = (self.indeed_selenium_proxy_host, self.indeed_selenium_proxy_port)
+        if any(field is not None for field in proxy_fields) and not all(field is not None for field in proxy_fields):
+            raise ValueError(
+                f"indeed_selenium_proxy_host/port must be all set or all unset -- got {proxy_fields!r}"
+            )
+        return self
+
     # Per-stage concurrency caps.
     hn_llm_concurrency: int = Field(default=5, gt=0)
     linkedin_search_concurrency: int = Field(default=10, gt=0)
@@ -89,6 +119,18 @@ class Settings(BaseSettings):
     # bar (see sources/indeed/selenium_client.py) only shows up after this
     # settles, not immediately after navigation.
     indeed_page_settle_seconds: float = Field(default=6, gt=0)
+
+    # Delay before every sequential Selenium fetch for the same Indeed
+    # country/query after the first -- both between pagination pages and
+    # between retry attempts on the same page (see sources/indeed/search.py).
+    # Each fetch already gets a fresh rotating residential-proxy IP with no
+    # shared cookies, but `vjk` (see search.py's module docstring) is a
+    # correlating token carried across every page of one query regardless --
+    # the same session identifier suddenly arriving from a different exit
+    # IP on every request, with no gap at all, is a plausible bot signal
+    # independent of IP reputation. Not yet confirmed to reduce block rates
+    # (see DECISIONS.md); a cheap, low-risk experiment.
+    indeed_sequential_call_delay_seconds: float = Field(default=2, ge=0)
 
     # Upper bound on collect_jobs() across all sources -- with per-country
     # retries/pagination and a 60s-per-request Decodo timeout (plus

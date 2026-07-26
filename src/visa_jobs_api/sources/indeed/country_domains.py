@@ -45,8 +45,11 @@ COUNTRY_DOMAINS: dict[str, str] = {
 # a page in the wrong locale even though the domain itself was already the
 # correct country's (see indeed_scraper_experiment/DECISIONS.md). Note this
 # is "gb", not "uk", for the United Kingdom -- Bright Data expects the real
-# ISO code, unlike Indeed's own domain naming.
-BRIGHTDATA_COUNTRY_CODES: dict[str, str] = {
+# ISO code, unlike Indeed's own domain naming. (The Selenium-driven
+# residential proxy, unlike Bright Data, doesn't target a specific exit
+# country per request at all -- see selenium_client.py's docstring for
+# why -- so it isn't a second consumer of this despite once being one.)
+ISO_COUNTRY_CODES: dict[str, str] = {
     "United States": "us",
     "Canada": "ca",
     "United Kingdom": "gb",

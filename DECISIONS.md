@@ -820,3 +820,251 @@ digest and `docker compose down` after (regardless of the digest's own
 exit code, via a trap, so a mid-run failure doesn't leave the model
 running indefinitely) -- see `LOCAL_SETUP.md` for the updated one-time
 setup steps.
+
+## Indeed's "0 cards" ambiguity resolved: its own `<title>` embeds a live result count
+
+Every 0-card Indeed search page was previously logged as "likely a
+blocked/empty page, not necessarily a real zero-result search" -- pure
+uncertainty, since the code only checked "did we parse any
+`job_seen_beacon` divs," and both a genuine zero-result page and a bot-
+block/CAPTCHA interstitial produce zero of those. Neither this project nor
+`indeed_scraper_experiment` (which hit the same ambiguity earlier) ever
+captured what an actual block page looks like -- both only ever confirmed
+"0 is sometimes transient" via blind retry, never *why*.
+
+**First step**: `extract.page_title()` added, logged alongside every
+0-card occurrence purely as a diagnostic, with no behavior change --
+intended to surface real title text the next time this happened in
+production so a real classifier could be built from it, rather than
+guessing.
+
+**That happened almost immediately** (`logs/digest_2026-07-26_18-11-11.log`):
+`'0 Python Backend Java Distributed Systems Work Authorization Sponsor
+Sponsorship Expat Jobs - 26 July 2026 | Indeed'`, reproduced identically
+across both retry attempts (16s apart). This is Indeed's own live,
+server-side result count embedded as the leading number in its title
+(format: `"{count} {keywords} Jobs - {date} | Indeed"`) -- a real page,
+not a bot-block/CAPTCHA interstitial (which can't know or care what you
+searched for, so it can't dynamically render your exact query keywords
+and a live count into a title). Indeed's own search engine was reporting,
+in its own words, zero matches for this specific complex boolean query in
+Ireland within the last 24h -- not a block at all.
+
+**Implemented as a real, three-way classifier** (`extract.title_reported_count`
++ `search._describe_zero_cards`), replacing the old single "might be
+blocked" message:
+- Title doesn't match the count-prefixed format at all -> likely a real
+  bot-block/CAPTCHA page.
+- Title's own count is 0 -> confirmed genuine zero, not a block.
+- Title's own count is >0 but 0 cards were parsed -> a selector/markup
+  mismatch on our end (Indeed changed its HTML) needing a code fix, not
+  an anti-bot issue -- a meaningfully different, actionable outcome the
+  old single-message version couldn't have surfaced at all.
+
+**Not resolved by this**: whether Indeed's own reported zero is itself
+sometimes a "soft" suppression shown selectively to suspected-bot sessions
+(rather than a hard CAPTCHA wall) is still unconfirmed either way --
+`indeed_scraper_experiment`'s DECISIONS.md documented the same exact
+query/params returning real cards on a later re-fetch, which is at least
+consistent with that theory. This change only resolves the "was this
+technically a real Indeed page or a block wall" question deterministically;
+it doesn't (and structurally can't, from a single page fetch) rule out
+Indeed's search results themselves being bot-aware.
+
+## Residential proxy (DataImpulse) confirmed to work for Indeed search via Selenium, wired in as optional
+
+`selenium_client.py`'s docstring flagged this as the one untested variable
+that could actually change the picture: every anti-blocking experiment so
+far (raw HTTP, Bright Data, Decodo, GitHub Actions' own runner) failed
+identically once the traffic came from a datacenter ASN, and only this
+machine's own residential IP reliably worked -- but a residential *proxy*
+routing Selenium's traffic specifically (as opposed to a datacenter proxy,
+already tried and blocked) had never been tried.
+
+You bought a DataImpulse residential proxy plan and asked to test it. This
+went through two real design iterations before landing on what's actually
+shipped -- both worth recording since they ruled out real approaches, not
+just theoretical ones.
+
+**Attempt 1: username/password auth + per-country targeting, via a Chrome
+extension.** DataImpulse's per-request country-targeting syntax
+(`login__cr.<iso-code>:password@host:port`) needs real proxy
+authentication, and Chrome has no `--proxy-server=http://user:pass@host:port`
+support for authenticated proxies from the command line -- so a temporary
+Manifest V2 extension was generated per fetch, setting the proxy via
+`chrome.proxy` and answering the auth prompt via `webRequest.onAuthRequired`
+(the standard workaround for this Chrome limitation). This *looked* like
+it worked in manual testing (real US/UK Indeed pages, 16 cards each,
+`vjk` captured) -- but the DataImpulse dashboard's own usage log told a
+different story: only 2 requests ever registered against the proxy
+(both from earlier raw `httpx` tests), meaning every "successful" Selenium
+test had actually connected *directly*, using this machine's own real IP,
+never touching the proxy at all. Root cause: Google disabled the
+`--load-extension` command-line flag for regular (non-"Chrome for
+Testing") Chrome builds starting at version 137, specifically because it
+was being abused to sideload malicious extensions via automation -- and it
+fails *silently* (no error; Chrome just ignores the flag and connects
+directly). Confirmed directly: Chrome here is 144.0.7559.60, and a
+Selenium session with the extension loaded still exited through this
+machine's real Airtel Broadband IP (`171.76.86.72`, confirmed via
+`ipinfo.io`), not any DataImpulse IP.
+
+**Attempt 2: drop auth entirely via IP-whitelist mode.** DataImpulse
+supports whitelisting a fixed source IP so it can proxy requests with no
+username/password at all, which sidesteps the whole broken-extension
+problem (`--proxy-server=http://host:port` alone, no credentials, works
+natively in vanilla Chrome). Whitelisted this machine's IP
+(`171.76.86.72`) in the DataImpulse dashboard, confirmed clean via `curl`
+and via a real Selenium session (exited through a genuine residential IP
+each time -- Stockholm, then Abu Dhabi, both confirmed via `ipinfo.io` as
+real consumer ISPs, not datacenters). **But** whitelist mode has no
+username, and DataImpulse's docs confirm per-request country targeting is
+*only* possible via the username suffix -- so whitelist mode can only ever
+hand out a random country from whatever's in the account's "Default
+Targeting" pool, with no way to request a specific one to match the
+Indeed domain being queried (e.g. no way to ask for a UK-looking IP
+specifically for `uk.indeed.com`).
+
+**Deliberate decision: don't try to fix that.** The instinct was that a
+country mismatch (e.g. a Swedish IP hitting `au.indeed.com`) would look
+more suspicious to Indeed's own bot detection, not less -- but you
+corrected this directly: random rotation across the Default Targeting
+pool, with no attempt to match proxy country to the domain being scraped,
+*is* the intended behavior, not a compromise. So the shipped design
+dropped country-targeting entirely rather than working around its loss --
+`selenium_client.ProxyConfig` is just `(host, port)`, no username/
+password/country fields at all, and `country_domains.ISO_COUNTRY_CODES`
+reverted to being Bright-Data-only again (its rename to a more generic
+name stays, since renaming back would just be churn, but the docstring no
+longer claims a second consumer).
+
+**Live reliability sample** (real Indeed fetches through the whitelisted
+proxy, no country matching): 3/4 raw attempts succeeded, the 1 failure a
+genuine Cloudflare challenge (`title: "Just a moment..."`) -- consistent
+with `search.py`'s existing "retry once before trusting a 0-card result"
+logic already handling this class of failure gracefully (confirmed live:
+a real `fetch_all_job_cards` call hit exactly this Cloudflare block on
+attempt 1, retried, and succeeded with 16 cards on attempt 2).
+
+**Wired in as fully optional** (`config.Settings.indeed_selenium_proxy_host`/
+`_port`, both unset by default): when unset, Selenium connects directly,
+exactly as before -- nothing about the existing residential-IP setup
+regressed. Also disabled image loading in Chrome prefs regardless of
+proxy use (`profile.managed_default_content_settings.images: 2`) -- this
+scraper never reads images, and they're a real cost against a metered
+residential-proxy quota (this plan: 5GB) for zero benefit.
+`Settings._proxy_settings_are_all_or_nothing` (a model validator) rejects
+a partially-set host/port pair at startup rather than letting it surface
+as a confusing failure deep inside `selenium_client.py` the first time
+Indeed search actually runs.
+
+**Not yet done in this pass**: re-enabling `daily-digest.yml`'s scheduled
+cron. This was wired in and confirmed on this machine (which already has
+a working residential IP of its own) -- running it from an actual
+non-residential environment like GitHub Actions, at full scale (all 8
+Indeed countries, real pagination, sustained over a full daily run,
+against the plan's 5GB/month quota) hasn't been tried yet and is the
+natural next step if that's the goal. Note the IP-whitelist requirement
+also means whichever machine actually runs this needs its own IP
+whitelisted with DataImpulse -- a GitHub Actions runner's IP changes every
+run, so whitelist mode specifically won't carry over there unchanged;
+that'd need either a dynamic whitelist update per run (DataImpulse likely
+exposes this via API, not yet checked) or reconsidering username/password
+auth (which would need the Chrome-for-Testing-binary or CDP-based
+workarounds discussed and set aside above).
+
+## Indeed's block-vs-zero classifier rebuilt around page structure, not `<title>`
+
+The `<title>`-based classifier added earlier (see the "Indeed's '0 cards'
+ambiguity resolved" entry above) was live for less than a day before being
+proven wrong by its own diagnostic output. Ran ~20 real fetches across all
+8 Indeed countries (some at multiple pagination offsets) specifically to
+gather evidence instead of reasoning further about it, and found genuine,
+reproducible false positives: Australia's and UAE's zero-result pages
+render titles like `"... (with Salaries) | Indeed Australia"` -- a real,
+fully-rendered page (~450KB, same size band as every other confirmed
+genuine-zero page gathered) with no leading result count at all, which the
+old classifier flagged as "likely blocked" purely because it didn't match
+the one title template ("{count} ... Jobs - {date} | Indeed") the
+classifier was built around. Indeed uses at least 5 different real-page
+title formats across the samples gathered (salary-range-prefixed for
+Canada, market-suffixed for Australia/UK, plain for UAE, count-prefixed
+for Ireland/NZ, and a fifth for the un-modified US template) -- title
+format tracks market/query, not block status.
+
+**Replaced with two structural checks on the page body** (`extract.
+is_genuine_indeed_page`/`is_confirmed_zero_result`), both confirmed
+against real captured samples:
+- The search box's own input field (`id="text-input-what"`) is present on
+  every genuine Indeed page gathered, 0 results or many, across every
+  title template seen -- and confirmed absent on an actual captured
+  Cloudflare Turnstile challenge page (39KB, no Indeed content at all
+  beyond the challenge JS, `<title>Just a moment...</title>`).
+- Indeed's own embedded client-state field (`"originalResultCount":0`)
+  is present, byte-identical, on every genuine zero-result page gathered,
+  regardless of title template -- this is Indeed's own frontend state,
+  not scraped/rendered text, so it's far more stable than either title
+  parsing or matching visible "no results" copy that could be localized.
+
+This gives the actual three-way split the earlier version was trying (and
+failing) to approximate: a **BOT BLOCK failure** (search-box markup
+absent -- not a real Indeed page at all), a genuine **0 JOBS** result
+(search-box present, zero-result state confirmed), or a selector/markup
+mismatch (search-box present, neither zero-result state nor any parsed
+cards -- Indeed changed its HTML, a code bug to fix, not a block). Log
+messages now say exactly one of "BOT BLOCK failure" or "0 JOBS, not a bot
+block" per line, replacing the old single "likely a bot-block/CAPTCHA
+page, not necessarily a real zero-result search" hedge.
+
+**Verified against a real run** (`logs/digest_2026-07-26_19-48-33.log`):
+of 6 countries that hit trouble, 3 (Ireland, New Zealand, Singapore) were
+confirmed genuine zeros and 3 (Australia, UAE, United States) were
+confirmed real blocks -- a real, useful split the title-based version
+could never have produced reliably.
+
+## Retry count bumped from 2 to 5, and a delay added between sequential Indeed calls
+
+Two more experiments prompted by that same run's mixed block-vs-zero
+picture, both aimed at the "BOT BLOCK failure" cases specifically (the
+genuine-zero cases don't need any of this -- there's nothing to retry
+past).
+
+**`_EMPTY_PAGE_RETRY_ATTEMPTS`: 2 -> 5.** Confirmed live this isn't just a
+bigger number for its own sake: tracing one run's United States pagination
+(`logs/digest_2026-07-26_19-48-33.log`) page by page, `start=10` hit real
+Cloudflare blocks on attempts 1-4 and only succeeded on attempt 5 -- a page
+the old 2-attempt limit would have lost entirely. `start=20` recovered on
+attempt 3 (still lost under the old limit). Only `start=40` exhausted all
+5 attempts and was genuinely lost. Net: 60 cards for US that run, up from
+32 in an earlier run under the same query.
+
+**`indeed_sequential_call_delay_seconds` (default 2s, both between
+pagination pages and between retry attempts on the same page) -- added as
+an experiment, not a confirmed fix.** The reasoning that prompted it: each
+Selenium fetch already gets a brand-new rotating residential IP and a
+fresh browser session (no shared cookies), so there's no persistent
+"identity" across requests for a wait to let cool down, and the ~10-15s
+natural gap from browser startup/settle/shutdown overhead alone is
+already comparable to what a deliberate short wait would add -- so a pure
+rate-limit theory seemed weak. But `vjk` (see this module's docstring) *is*
+carried across every page of one query via the URL, and Indeed's backend
+almost certainly treats it as a correlating session token -- so pages 1+
+arrive with a consistent token but a different (possibly different-
+country) exit IP on every single request, a pattern a real browser session
+could never produce, and blocks did skew toward later pagination pages
+over page 0 (which never carries a `vjk`) across several runs. Whether
+this specific theory is right, and whether a 2s delay meaningfully changes
+the block rate either way, is **not yet confirmed** -- this needs an A/B
+comparison across real runs to know.
+
+**Also investigated, not pursued for now**: DataImpulse's dashboard has a
+Rotating/Sticky connection-type toggle, described in their docs as
+"port-based" (a different port number pins the same exit IP for a
+duration) -- if that's compatible with IP-whitelist auth (unconfirmed),
+switching to Sticky would let all pages of one query share the same IP
+that the `vjk` token is implicitly tied to, addressing the mismatch
+directly rather than just adding a delay around it. Their `sessid.<value>`
+mechanism (the other way to get sticky IPs) is confirmed to require
+username-based auth, which reopens the Chrome-137/`--load-extension`
+dead end already ruled out above -- not worth pursuing unless the
+port-based toggle turns out incompatible with whitelist mode.

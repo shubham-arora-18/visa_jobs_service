@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from visa_jobs_api.sources.indeed.extract import has_additional_pages, parse_job_cards
+from visa_jobs_api.sources.indeed.extract import (
+    has_additional_pages,
+    is_confirmed_zero_result,
+    is_genuine_indeed_page,
+    page_title,
+    parse_job_cards,
+)
 
 
 def _card_html(job_key: str, title: str, company: str, location: str) -> str:
@@ -78,3 +84,40 @@ def test_has_additional_pages_false_when_nav_is_empty() -> None:
 
 def test_has_additional_pages_false_when_nav_is_absent_entirely() -> None:
     assert has_additional_pages("<html><body>no nav here</body></html>") is False
+
+
+def test_page_title_extracts_title_text() -> None:
+    html = "<html><head><title>Python Jobs in Ireland | Indeed.com</title></head><body></body></html>"
+    assert page_title(html) == "Python Jobs in Ireland | Indeed.com"
+
+
+def test_page_title_returns_empty_string_when_absent() -> None:
+    assert page_title("<html><body>no title here</body></html>") == ""
+
+
+def test_is_genuine_indeed_page_true_when_search_box_present() -> None:
+    # The search box's own input field, confirmed live to be present on
+    # every genuine Indeed search page gathered (0 results or many, across
+    # every title template variant seen) -- see DECISIONS.md.
+    html = '<html><body><input id="text-input-what" value="Python"></body></html>'
+    assert is_genuine_indeed_page(html) is True
+
+
+def test_is_genuine_indeed_page_false_when_search_box_absent() -> None:
+    # Confirmed live against an actual captured Cloudflare Turnstile
+    # challenge page (39KB, no Indeed content at all beyond challenge JS).
+    html = "<html><head><title>Just a moment...</title></head><body></body></html>"
+    assert is_genuine_indeed_page(html) is False
+
+
+def test_is_confirmed_zero_result_true_when_result_count_marker_present() -> None:
+    # Indeed's own embedded client-state field, confirmed live to be
+    # byte-identical across every genuine zero-result page gathered,
+    # regardless of which title template that page used.
+    html = '<html><body><script>{"jobCountInfo":"No Result","originalResultCount":0}</script></body></html>'
+    assert is_confirmed_zero_result(html) is True
+
+
+def test_is_confirmed_zero_result_false_when_marker_absent() -> None:
+    html = "<html><body>real results here</body></html>"
+    assert is_confirmed_zero_result(html) is False

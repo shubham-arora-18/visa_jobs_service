@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from visa_jobs_api.config import Settings
 from visa_jobs_api.shared.call_stats import CallStats
 from visa_jobs_api.sources.indeed.models import SearchQuery
-from visa_jobs_api.sources.indeed.selenium_client import SeleniumFetchError
-from visa_jobs_api.sources.indeed.search import _build_search_url, _fromage_for_hours, fetch_all_job_cards
+from visa_jobs_api.sources.indeed.selenium_client import ProxyConfig, SeleniumFetchError
+from visa_jobs_api.sources.indeed.search import _build_search_url, _fromage_for_hours, _proxy_config, fetch_all_job_cards
 
 _NAV_WITH_MORE_PAGES = """
 <nav role="navigation" aria-label="pagination">
@@ -44,6 +46,15 @@ def _settings(**overrides: object) -> Settings:
         indeed_max_pages_per_query=3,
         indeed_search_concurrency=5,
         indeed_min_cards_per_page=2,
+        # Explicit None, not just omitted -- otherwise pydantic-settings
+        # falls back to whatever's actually in this machine's real .env
+        # (which has a real proxy configured), making these tests'
+        # outcomes depend on developer-machine state.
+        indeed_selenium_proxy_host=None,
+        indeed_selenium_proxy_port=None,
+        # 0, not the real 2s default -- these tests hit the retry/pagination
+        # loops many times each and asyncio.sleep really waits real time.
+        indeed_sequential_call_delay_seconds=0,
     )
     defaults.update(overrides)
     return Settings(**defaults)
@@ -98,7 +109,7 @@ async def test_fetch_all_job_cards_stops_after_page_0_when_nav_has_no_further_pa
     # extract.has_additional_pages's docstring.
     call_count = 0
 
-    async def fake_fetch(url: str, *, page_settle_seconds: float) -> tuple[str, str]:
+    async def fake_fetch(url: str, *, page_settle_seconds: float, proxy=None) -> tuple[str, str]:
         nonlocal call_count
         call_count += 1
         html = _page_html([_card_html("1", "Job 1", "Acme", "New York, NY")], nav=_NAV_WITH_NO_MORE_PAGES)
@@ -125,7 +136,7 @@ async def test_fetch_all_job_cards_continues_past_page_0_when_nav_advertises_mor
     ]
     requested_urls: list[str] = []
 
-    async def fake_fetch(url: str, *, page_settle_seconds: float) -> tuple[str, str]:
+    async def fake_fetch(url: str, *, page_settle_seconds: float, proxy=None) -> tuple[str, str]:
         requested_urls.append(url)
         html = pages[len(requested_urls) - 1]
         current_url = f"{url}&vjk=captured123" if len(requested_urls) == 1 else url
@@ -146,6 +157,69 @@ async def test_fetch_all_job_cards_continues_past_page_0_when_nav_advertises_mor
     assert "vjk" not in requested_urls[0]  # page 0 itself has no vjk to attach yet
 
 
+async def test_fetch_all_job_cards_delays_before_each_sequential_page_but_not_before_page_0(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pages = [
+        _page_html([_card_html("1", "Job 1", "Acme", "NY"), _card_html("2", "Job 2", "Acme", "NY")], nav=_NAV_WITH_MORE_PAGES),
+        _page_html([_card_html("3", "Job 3", "Acme", "NY"), _card_html("4", "Job 4", "Acme", "NY")], nav=_NAV_WITH_MORE_PAGES),
+        _page_html([_card_html("5", "Job 5", "Acme", "NY"), _card_html("6", "Job 6", "Acme", "NY")]),
+    ]
+    call_count = 0
+
+    async def fake_fetch(url: str, *, page_settle_seconds: float, proxy=None) -> tuple[str, str]:
+        nonlocal call_count
+        html = pages[call_count]
+        call_count += 1
+        return html, url
+
+    monkeypatch.setattr("visa_jobs_api.sources.indeed.search.fetch_html_via_selenium", fake_fetch)
+
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr("visa_jobs_api.sources.indeed.search.asyncio.sleep", fake_sleep)
+
+    settings = _settings(indeed_max_pages_per_query=3, indeed_sequential_call_delay_seconds=2.5)
+    await fetch_all_job_cards(
+        [SearchQuery(keywords="Python", country="United States")], settings=settings, posted_within_hours=24
+    )
+
+    # 2 delays: before page 1 and before page 2 -- none before page 0,
+    # which is the very first call for this country.
+    assert sleep_calls == [2.5, 2.5]
+
+
+async def test_fetch_page_with_retry_delays_before_each_retry_attempt_but_not_the_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    call_count = 0
+
+    async def fake_fetch(url: str, *, page_settle_seconds: float, proxy=None) -> tuple[str, str]:
+        nonlocal call_count
+        call_count += 1
+        return "<html>blocked or empty page</html>", url
+
+    monkeypatch.setattr("visa_jobs_api.sources.indeed.search.fetch_html_via_selenium", fake_fetch)
+
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr("visa_jobs_api.sources.indeed.search.asyncio.sleep", fake_sleep)
+
+    settings = _settings(indeed_max_pages_per_query=1, indeed_sequential_call_delay_seconds=2.5)
+    await fetch_all_job_cards(
+        [SearchQuery(keywords="Python", country="United States")], settings=settings, posted_within_hours=24
+    )
+
+    # 4 delays: before retry attempts 2-5 of page 0 -- none before attempt 1.
+    assert sleep_calls == [2.5, 2.5, 2.5, 2.5]
+
+
 async def test_fetch_all_job_cards_stops_the_whole_query_when_page_0_fails_to_load(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -154,7 +228,7 @@ async def test_fetch_all_job_cards_stops_the_whole_query_when_page_0_fails_to_lo
     # signal yet to build any subsequent page from.
     call_count = 0
 
-    async def fake_fetch(url: str, *, page_settle_seconds: float) -> tuple[str, str]:
+    async def fake_fetch(url: str, *, page_settle_seconds: float, proxy=None) -> tuple[str, str]:
         nonlocal call_count
         call_count += 1
         raise SeleniumFetchError("boom")
@@ -176,7 +250,7 @@ async def test_fetch_all_job_cards_retries_a_suspicious_empty_page_before_trusti
     responses = ["<html>blocked or empty page</html>", _page_html([_card_html("1", "Job 1", "Acme", "NY")])]
     call_count = 0
 
-    async def fake_fetch(url: str, *, page_settle_seconds: float) -> tuple[str, str]:
+    async def fake_fetch(url: str, *, page_settle_seconds: float, proxy=None) -> tuple[str, str]:
         nonlocal call_count
         html = responses[call_count]
         call_count += 1
@@ -196,7 +270,7 @@ async def test_fetch_all_job_cards_retries_a_suspicious_empty_page_before_trusti
 async def test_fetch_all_job_cards_accepts_zero_after_exhausting_retries(monkeypatch: pytest.MonkeyPatch) -> None:
     call_count = 0
 
-    async def fake_fetch(url: str, *, page_settle_seconds: float) -> tuple[str, str]:
+    async def fake_fetch(url: str, *, page_settle_seconds: float, proxy=None) -> tuple[str, str]:
         nonlocal call_count
         call_count += 1
         return "<html>blocked or empty page</html>", url
@@ -208,8 +282,80 @@ async def test_fetch_all_job_cards_accepts_zero_after_exhausting_retries(monkeyp
         [SearchQuery(keywords="Python", country="United States")], settings=settings, posted_within_hours=24
     )
 
-    assert call_count == 2  # both retry attempts exhausted, 0 accepted as final
+    assert call_count == 5  # all retry attempts exhausted, 0 accepted as final
     assert cards == []
+
+
+async def test_fetch_all_job_cards_logs_confirmed_genuine_zero_when_result_marker_present(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Real page state, confirmed live -- see DECISIONS.md: Indeed's own
+    # embedded "originalResultCount":0 field is a genuine zero, not a
+    # block, regardless of which title template the page happens to use.
+    async def fake_fetch(url: str, *, page_settle_seconds: float, proxy=None) -> tuple[str, str]:
+        html = (
+            '<html><head><title>Python Jobs (with Salaries) | Indeed</title></head>'
+            '<body><input id="text-input-what"><script>{"originalResultCount":0}</script></body></html>'
+        )
+        return html, url
+
+    monkeypatch.setattr("visa_jobs_api.sources.indeed.search.fetch_html_via_selenium", fake_fetch)
+
+    settings = _settings(indeed_max_pages_per_query=1)
+    with caplog.at_level(logging.WARNING, logger="visa_jobs_api.sources.indeed.search"):
+        await fetch_all_job_cards(
+            [SearchQuery(keywords="Python", country="United States")], settings=settings, posted_within_hours=24
+        )
+
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "0 JOBS, not a bot block" in messages
+    assert "confirms zero results" in messages
+
+
+async def test_fetch_all_job_cards_logs_bot_block_when_search_box_absent(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Confirmed live against an actual captured Cloudflare Turnstile
+    # challenge page: no Indeed search-box markup present at all.
+    async def fake_fetch(url: str, *, page_settle_seconds: float, proxy=None) -> tuple[str, str]:
+        return "<html><head><title>Just a moment...</title></head><body></body></html>", url
+
+    monkeypatch.setattr("visa_jobs_api.sources.indeed.search.fetch_html_via_selenium", fake_fetch)
+
+    settings = _settings(indeed_max_pages_per_query=1)
+    with caplog.at_level(logging.WARNING, logger="visa_jobs_api.sources.indeed.search"):
+        await fetch_all_job_cards(
+            [SearchQuery(keywords="Python", country="United States")], settings=settings, posted_within_hours=24
+        )
+
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "Just a moment..." in messages
+    assert "BOT BLOCK failure" in messages
+
+
+async def test_fetch_all_job_cards_logs_likely_selector_mismatch_when_neither_marker_present(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A genuine Indeed page (search box present) that neither confirms
+    # zero results nor has any parseable cards -- a markup/selector drift
+    # bug on our end, not a block.
+    async def fake_fetch(url: str, *, page_settle_seconds: float, proxy=None) -> tuple[str, str]:
+        html = (
+            '<html><head><title>Python Jobs, Employment | Indeed</title></head>'
+            '<body><input id="text-input-what"></body></html>'
+        )
+        return html, url
+
+    monkeypatch.setattr("visa_jobs_api.sources.indeed.search.fetch_html_via_selenium", fake_fetch)
+
+    settings = _settings(indeed_max_pages_per_query=1)
+    with caplog.at_level(logging.WARNING, logger="visa_jobs_api.sources.indeed.search"):
+        await fetch_all_job_cards(
+            [SearchQuery(keywords="Python", country="United States")], settings=settings, posted_within_hours=24
+        )
+
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "likely a selector/markup mismatch (Indeed changed its HTML), not a block" in messages
 
 
 async def test_fetch_all_job_cards_stops_pagination_after_a_successful_but_empty_page(
@@ -222,7 +368,7 @@ async def test_fetch_all_job_cards_stops_pagination_after_a_successful_but_empty
     ]
     call_count = 0
 
-    async def fake_fetch(url: str, *, page_settle_seconds: float) -> tuple[str, str]:
+    async def fake_fetch(url: str, *, page_settle_seconds: float, proxy=None) -> tuple[str, str]:
         nonlocal call_count
         html = pages[min(call_count, len(pages) - 1)]
         call_count += 1
@@ -236,8 +382,8 @@ async def test_fetch_all_job_cards_stops_pagination_after_a_successful_but_empty
     )
 
     assert len(cards) == 2  # page 0's cards only
-    # page 0 (1 call) + page 1's 2 retry attempts (both empty) = 3; page 2 never requested
-    assert call_count == 3
+    # page 0 (1 call) + page 1's 5 retry attempts (all empty) = 6; page 2 never requested
+    assert call_count == 6
 
 
 async def test_fetch_all_job_cards_stops_pagination_after_a_page_below_the_min_cards_threshold(
@@ -250,7 +396,7 @@ async def test_fetch_all_job_cards_stops_pagination_after_a_page_below_the_min_c
     ]
     call_count = 0
 
-    async def fake_fetch(url: str, *, page_settle_seconds: float) -> tuple[str, str]:
+    async def fake_fetch(url: str, *, page_settle_seconds: float, proxy=None) -> tuple[str, str]:
         nonlocal call_count
         html = pages[call_count]
         call_count += 1
@@ -275,7 +421,7 @@ async def test_fetch_all_job_cards_records_one_search_call_per_page_fetched(monk
     ]
     call_count = 0
 
-    async def fake_fetch(url: str, *, page_settle_seconds: float) -> tuple[str, str]:
+    async def fake_fetch(url: str, *, page_settle_seconds: float, proxy=None) -> tuple[str, str]:
         nonlocal call_count
         html = pages[call_count]
         call_count += 1
@@ -303,7 +449,7 @@ async def test_fetch_all_job_cards_keeps_going_past_a_page_that_fails_to_fetch(
     )
     call_count = 0
 
-    async def fake_fetch(url: str, *, page_settle_seconds: float) -> tuple[str, str]:
+    async def fake_fetch(url: str, *, page_settle_seconds: float, proxy=None) -> tuple[str, str]:
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -324,7 +470,7 @@ async def test_fetch_all_job_cards_keeps_going_past_a_page_that_fails_to_fetch(
 async def test_fetch_all_job_cards_continues_other_queries_when_one_querys_page_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_fetch(url: str, *, page_settle_seconds: float) -> tuple[str, str]:
+    async def fake_fetch(url: str, *, page_settle_seconds: float, proxy=None) -> tuple[str, str]:
         if url.startswith("https://www.indeed.com/"):  # United States' domain -- see country_domains.py
             raise SeleniumFetchError("boom")
         html = _page_html([_card_html("1", "Job 1", "Acme", "Dublin")], nav=_NAV_WITH_NO_MORE_PAGES)
@@ -343,3 +489,49 @@ async def test_fetch_all_job_cards_continues_other_queries_when_one_querys_page_
     )
 
     assert len(cards) == 1
+
+
+def test_proxy_config_returns_none_when_unconfigured() -> None:
+    assert _proxy_config(_settings()) is None
+
+
+def test_proxy_config_builds_proxyconfig_when_configured() -> None:
+    settings = _settings(indeed_selenium_proxy_host="gw.example.com", indeed_selenium_proxy_port=823)
+
+    assert _proxy_config(settings) == ProxyConfig(host="gw.example.com", port=823)
+
+
+async def test_fetch_all_job_cards_passes_proxy_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    received: dict[str, object] = {}
+
+    async def fake_fetch(url: str, *, page_settle_seconds: float, proxy=None) -> tuple[str, str]:
+        received["proxy"] = proxy
+        return _page_html([_card_html("1", "Job 1", "Acme", "NY")]), url
+
+    monkeypatch.setattr("visa_jobs_api.sources.indeed.search.fetch_html_via_selenium", fake_fetch)
+
+    settings = _settings(
+        indeed_max_pages_per_query=1, indeed_selenium_proxy_host="gw.example.com", indeed_selenium_proxy_port=823
+    )
+    await fetch_all_job_cards(
+        [SearchQuery(keywords="Python", country="United States")], settings=settings, posted_within_hours=24
+    )
+
+    assert received["proxy"] == ProxyConfig(host="gw.example.com", port=823)
+
+
+async def test_fetch_all_job_cards_passes_no_proxy_when_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
+    received: dict[str, object] = {}
+
+    async def fake_fetch(url: str, *, page_settle_seconds: float, proxy=None) -> tuple[str, str]:
+        received["proxy"] = proxy
+        return _page_html([_card_html("1", "Job 1", "Acme", "NY")]), url
+
+    monkeypatch.setattr("visa_jobs_api.sources.indeed.search.fetch_html_via_selenium", fake_fetch)
+
+    settings = _settings(indeed_max_pages_per_query=1)
+    await fetch_all_job_cards(
+        [SearchQuery(keywords="Python", country="United States")], settings=settings, posted_within_hours=24
+    )
+
+    assert received["proxy"] is None
