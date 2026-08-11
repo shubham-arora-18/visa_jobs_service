@@ -32,6 +32,7 @@ from visa_jobs_api.config import Settings
 from visa_jobs_api.shared.call_stats import CallStats
 from visa_jobs_api.shared.concurrency import gather_limited
 from visa_jobs_api.shared.http import FetchError, fetch_html
+from visa_jobs_api.sources.linkedin.country_codes import ISO_COUNTRY_CODES
 from visa_jobs_api.sources.linkedin.models import JobCard, SearchQuery
 
 logger = logging.getLogger(__name__)
@@ -94,9 +95,10 @@ async def _fetch_query_job_cards(
             html = await fetch_html(
                 client,
                 url,
-                via_decodo=True,
-                decodo_username=settings.decodo_username,
-                decodo_password=settings.decodo_password,
+                via_brightdata=True,
+                brightdata_api_key=settings.brightdata_api_key,
+                brightdata_zone=settings.brightdata_zone,
+                brightdata_country=ISO_COUNTRY_CODES[query.location],
             )
         except FetchError as exc:
             logger.error(

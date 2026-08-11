@@ -6,10 +6,11 @@ not www.indeed.com?l=Netherlands. Every domain here was confirmed
 reachable and, for several, verified live to return real, correct-country
 job listings -- see indeed_scraper_experiment/DECISIONS.md.
 
-No proxy geo-pinning parameter is needed here (unlike the Bright Data
-setup this used to require) -- Decodo's JS-rendered fetches (see
-shared/http.py) return the correct English-locale content for every domain
-below with no geo param at all, confirmed live.
+No proxy geo-pinning parameter is needed for the *search* domains here --
+Indeed's own per-country domain already picks the right locale for a
+Selenium-driven fetch with no geo param at all. `ISO_COUNTRY_CODES` below
+is a separate concern: Bright Data's geo-pin for *description* fetches
+(see shared/http.py), which does require an explicit `country` param.
 
 Restricted to English-dominant job markets, not the full 18-country list
 LinkedIn searches: forcing English results on Indeed for a non-English-

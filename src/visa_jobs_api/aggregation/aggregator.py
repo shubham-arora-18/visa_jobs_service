@@ -61,13 +61,14 @@ def build_sources(
             keywords=linkedin_keywords,
             posted_within_hours=posted_within_hours,
         ),
-        IndeedSource(
-            settings=settings,
-            http_client=http_client,
-            call_stats=call_stats,
-            keywords=indeed_keywords,
-            posted_within_hours=posted_within_hours,
-        ),
+        # Temporarily disabled (2026-08-11) -- re-enable by uncommenting.
+        # IndeedSource(
+        #     settings=settings,
+        #     http_client=http_client,
+        #     call_stats=call_stats,
+        #     keywords=indeed_keywords,
+        #     posted_within_hours=posted_within_hours,
+        # ),
     ]
 
 

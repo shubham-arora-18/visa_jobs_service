@@ -44,44 +44,48 @@ class Settings(BaseSettings):
         # and Password not accepted` SMTP auth failure.
         return value.replace(" ", "")
 
-    # Used for LinkedIn's search + description fetches.
-    decodo_username: str
-    decodo_password: str
-
-    # Used for Indeed's description fetches (Indeed search stays on
-    # Selenium) -- swapped in from Decodo after a live comparison found
-    # Decodo failing a large share of Indeed description fetches (401s and
-    # read timeouts) that Bright Data succeeded on. See DECISIONS.md.
+    # Used for LinkedIn's search + description fetches, and Indeed's
+    # description fetches (Indeed search stays on Selenium) -- Decodo used
+    # to serve LinkedIn and Bright Data used to serve Indeed's description
+    # fetches; both now go through Bright Data's Web Unlocker, since a live
+    # comparison already found Bright Data more reliable than Decodo for
+    # Indeed (401s and read timeouts), and there's no reason to keep two
+    # scraping providers around otherwise. See DECISIONS.md.
     brightdata_api_key: str
     brightdata_zone: str
 
-    # Optional residential proxy for Indeed's Selenium-driven *search*
-    # fetches (unlike the settings above, this doesn't touch description
-    # fetches). Both unset (the default) means Selenium connects directly,
+    # Residential proxy for Indeed's Selenium-driven *search* fetches
+    # (unlike the settings above, this doesn't touch description fetches).
+    # All four unset (the default) means Selenium connects directly,
     # unproxied -- the original setup, which only works from a
-    # residential/office IP (this machine's own). Confirmed live that a
-    # real residential proxy (DataImpulse) routing Selenium's traffic also
-    # gets through cleanly most of the time -- see selenium_client.py and
-    # DECISIONS.md -- which is what makes this worth having at all: it's
-    # the one thing that could let Indeed search run from a non-residential
-    # machine (e.g. GitHub Actions) instead of being tied to this Mac
-    # specifically. No username/password: auth is via the proxy provider
-    # whitelisting this machine's own outbound IP instead, and this
-    # deliberately does not target a specific exit country per request --
-    # see selenium_client.py's docstring for why.
+    # residential/office IP (this machine's own). Real username/password
+    # auth, not an IP whitelist -- switching from Chrome to Firefox (see
+    # selenium_client.py) made a real proxy-auth WebExtension workable
+    # again, which is what makes credentials-based auth worth having:
+    # it doesn't depend on a specific machine's IP staying whitelisted
+    # with the proxy provider. Deliberately no per-request country
+    # targeting -- see selenium_client.py's docstring for why.
     indeed_selenium_proxy_host: str | None = None
     indeed_selenium_proxy_port: int | None = None
+    indeed_selenium_proxy_username: str | None = None
+    indeed_selenium_proxy_password: str | None = None
 
     @model_validator(mode="after")
     def _proxy_settings_are_all_or_nothing(self) -> Settings:
-        # A partially-set proxy config (e.g. host set but port missing)
+        # A partially-set proxy config (e.g. host set but password missing)
         # would otherwise surface as a confusing failure deep inside
         # selenium_client.py the next time Indeed search runs, rather than
         # a clear error at startup.
-        proxy_fields = (self.indeed_selenium_proxy_host, self.indeed_selenium_proxy_port)
+        proxy_fields = (
+            self.indeed_selenium_proxy_host,
+            self.indeed_selenium_proxy_port,
+            self.indeed_selenium_proxy_username,
+            self.indeed_selenium_proxy_password,
+        )
         if any(field is not None for field in proxy_fields) and not all(field is not None for field in proxy_fields):
             raise ValueError(
-                f"indeed_selenium_proxy_host/port must be all set or all unset -- got {proxy_fields!r}"
+                "indeed_selenium_proxy_host/port/username/password must be all set or all unset -- "
+                f"got {proxy_fields!r}"
             )
         return self
 
@@ -133,15 +137,20 @@ class Settings(BaseSettings):
     indeed_sequential_call_delay_seconds: float = Field(default=2, ge=0)
 
     # Upper bound on collect_jobs() across all sources -- with per-country
-    # retries/pagination and a 60s-per-request Decodo timeout (plus
+    # retries/pagination and a 60s-per-request Bright Data timeout (plus
     # Selenium's own page-load/settle time for Indeed search), an unbounded
     # run can otherwise stretch into many minutes with nothing timing it
-    # out from inside the app. Doubled from
-    # an original 600s: removing Indeed's sc= (Job Type/Experience Level)
-    # filter lets more candidates through per country (verified live,
-    # Indeed alone: 97 raw cards -> 23 after filter, up from ~7-15 before),
-    # needing more time for description-fetch + LLM confirmation.
-    digest_run_timeout_seconds: int = Field(default=1200, gt=0)
+    # out from inside the app. Doubled from an original 600s to 1200s:
+    # removing Indeed's sc= (Job Type/Experience Level) filter lets more
+    # candidates through per country (verified live, Indeed alone: 97 raw
+    # cards -> 23 after filter, up from ~7-15 before), needing more time for
+    # description-fetch + LLM confirmation. Doubled again to 2400s after
+    # two consecutive real local runs (2026-08-11) both hit the 1200s cap
+    # mid-run -- LinkedIn's own candidate volume across its 17 countries
+    # (670+) now regularly reaches its LLM-confirmation stage only with the
+    # budget already exhausted, sometimes compounded by Indeed's bot-block
+    # retry/backoff eating wall-clock time concurrently. See DECISIONS.md.
+    digest_run_timeout_seconds: int = Field(default=2400, gt=0)
 
     def recipient_list(self) -> list[str]:
         recipients = [email.strip() for email in self.digest_recipients.split(",") if email.strip()]
