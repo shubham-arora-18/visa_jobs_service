@@ -29,21 +29,22 @@ jobs:
       - name: Install dependencies
         run: pip install -e .
 
-      # Indeed's search pages go through Selenium/real headless Chrome now
+      # Indeed's search pages go through Selenium/real headless Firefox now
       # (see src/visa_jobs_api/sources/indeed/selenium_client.py), not
-      # Bright Data -- this guarantees a Chrome binary is present on the
+      # Bright Data -- this guarantees a Firefox binary is present on the
       # runner rather than relying on whatever ubuntu-latest happens to
       # ship. Selenium's own Selenium Manager auto-downloads a matching
-      # chromedriver at run time, so no separate driver step is needed.
-      - uses: browser-actions/setup-chrome@v1
+      # geckodriver at run time, so no separate driver step is needed.
+      # (Switched from Chrome: a live comparison via the residential proxy
+      # below found Chrome reliably hitting real Cloudflare challenges that
+      # Firefox didn't -- see DECISIONS.md.)
+      - uses: browser-actions/setup-firefox@v1
 
       - name: Run digest
         env:
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           DIGEST_RECIPIENTS: ${{ vars.DIGEST_RECIPIENTS }}
-          DECODO_USERNAME: ${{ secrets.DECODO_USERNAME }}
-          DECODO_PASSWORD: ${{ secrets.DECODO_PASSWORD }}
           BRIGHTDATA_API_KEY: ${{ secrets.BRIGHTDATA_API_KEY }}
           BRIGHTDATA_ZONE: ${{ secrets.BRIGHTDATA_ZONE }}
           INDEED_PAGE_SETTLE_SECONDS: ${{ vars.INDEED_PAGE_SETTLE_SECONDS }}

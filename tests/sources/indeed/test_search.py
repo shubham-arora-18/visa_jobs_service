@@ -40,8 +40,6 @@ def _settings(**overrides: object) -> Settings:
         gmail_address="a@b.com",
         gmail_app_password="pw",
         digest_recipients="me@example.com",
-        decodo_username="decodo-user",
-        decodo_password="decodo-pass",
         indeed_posts_per_page=2,
         indeed_max_pages_per_query=3,
         indeed_search_concurrency=5,
@@ -52,6 +50,8 @@ def _settings(**overrides: object) -> Settings:
         # outcomes depend on developer-machine state.
         indeed_selenium_proxy_host=None,
         indeed_selenium_proxy_port=None,
+        indeed_selenium_proxy_username=None,
+        indeed_selenium_proxy_password=None,
         # 0, not the real 2s default -- these tests hit the retry/pagination
         # loops many times each and asyncio.sleep really waits real time.
         indeed_sequential_call_delay_seconds=0,
@@ -496,9 +496,14 @@ def test_proxy_config_returns_none_when_unconfigured() -> None:
 
 
 def test_proxy_config_builds_proxyconfig_when_configured() -> None:
-    settings = _settings(indeed_selenium_proxy_host="gw.example.com", indeed_selenium_proxy_port=823)
+    settings = _settings(
+        indeed_selenium_proxy_host="gw.example.com",
+        indeed_selenium_proxy_port=823,
+        indeed_selenium_proxy_username="user",
+        indeed_selenium_proxy_password="pass",
+    )
 
-    assert _proxy_config(settings) == ProxyConfig(host="gw.example.com", port=823)
+    assert _proxy_config(settings) == ProxyConfig(host="gw.example.com", port=823, username="user", password="pass")
 
 
 async def test_fetch_all_job_cards_passes_proxy_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -511,13 +516,17 @@ async def test_fetch_all_job_cards_passes_proxy_when_configured(monkeypatch: pyt
     monkeypatch.setattr("visa_jobs_api.sources.indeed.search.fetch_html_via_selenium", fake_fetch)
 
     settings = _settings(
-        indeed_max_pages_per_query=1, indeed_selenium_proxy_host="gw.example.com", indeed_selenium_proxy_port=823
+        indeed_max_pages_per_query=1,
+        indeed_selenium_proxy_host="gw.example.com",
+        indeed_selenium_proxy_port=823,
+        indeed_selenium_proxy_username="user",
+        indeed_selenium_proxy_password="pass",
     )
     await fetch_all_job_cards(
         [SearchQuery(keywords="Python", country="United States")], settings=settings, posted_within_hours=24
     )
 
-    assert received["proxy"] == ProxyConfig(host="gw.example.com", port=823)
+    assert received["proxy"] == ProxyConfig(host="gw.example.com", port=823, username="user", password="pass")
 
 
 async def test_fetch_all_job_cards_passes_no_proxy_when_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:

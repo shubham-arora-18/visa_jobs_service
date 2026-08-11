@@ -1068,3 +1068,181 @@ mechanism (the other way to get sticky IPs) is confirmed to require
 username-based auth, which reopens the Chrome-137/`--load-extension`
 dead end already ruled out above -- not worth pursuing unless the
 port-based toggle turns out incompatible with whitelist mode.
+
+## Switched Indeed search from Chrome to Firefox -- confirmed live to stop hitting real bot blocks entirely
+
+You asked directly whether `http://user:pass@host` proxy auth could just
+work again (reopening the question the IP-whitelist switch above was
+meant to close), and to test browsers other than Chrome if not. Both
+questions led somewhere real.
+
+**Chrome's `--proxy-server` genuinely ignores embedded credentials.**
+Confirmed live: a raw `curl` with `http://login__cr.in:pass@gw.dataimpulse.com:823`
+returns a real Indian residential IP every time, but the identical URL
+passed to Chrome's `--proxy-server` flag produces Chrome's own internal
+network-error page (title `"api.ipify.org"`, the standard Chrome
+"can't connect" template) -- Chrome tries the proxy, gets a 407, and has
+no way to answer it from that flag alone. Browser-level, not
+DataImpulse-specific.
+
+**Chrome's extension-based auth workaround is dead on this Chrome
+version for a different reason than first assumed.** Downloaded a real
+"Chrome for Testing" build (Google's automation-blessed channel, still
+allows `--load-extension`) specifically to retry the Manifest-V2 proxy-auth
+extension from the "Residential proxy confirmed to work..." entry above.
+Chrome's own logs gave the real answer: `"Cannot install extension because
+it uses an unsupported manifest version"` -- Chrome 151 has fully dropped
+Manifest V2 support, independent of the `--load-extension` flag (which
+Chrome for Testing does still honor). Rewrote the extension as Manifest V3
+using `webRequestAuthProvider` (a permission Google kept specifically to
+preserve blocking `onAuthRequired` after removing blocking `webRequest`
+generally) -- it loaded (confirmed via a `service_worker` CDP target), but
+proved unreliable in practice: only 2 of 8 attempts across two test
+batches actually engaged the proxy at all (the MV3 service worker doesn't
+reliably finish `chrome.proxy.settings.set()` before Selenium's `driver.get()`
+navigates), and the 2 that did engage returned the wrong country every
+single time despite requesting India specifically (UK, then US) -- the
+identical credential string works correctly via raw `curl`, so something
+about how a browser extension issues the authenticated CONNECT request
+doesn't preserve the country tag the way curl's request does. One attempt
+also hung for 2+ minutes. Not pursued further given the reliability
+problems alone, on top of not needing country targeting at all (see
+above).
+
+**Firefox never dropped Manifest V2, and never removed blocking
+`webRequest`.** Same idea -- proxy set via `browser.proxy.onRequest`,
+credentials answered via `browser.webRequest.onAuthRequired` -- but as an
+ordinary MV2 WebExtension, installed via geckodriver's
+`driver.install_addon(path, temporary=True)` (bypasses Firefox's normal
+extension-signing requirement, meant for exactly this kind of
+local/automation use). Result, across two full rounds of testing (8
+attempts): **8/8 engaged the proxy successfully** -- a real, complete
+turnaround from Chrome's ~25%. Country targeting was wrong at first here
+too (UAE/Sweden/US instead of India, 4/4), until you changed something on
+the DataImpulse dashboard (not diagnosed further, since it isn't needed
+for anything this app actually does) -- after that, country targeting
+also worked correctly, 8/8.
+
+**The actual point of switching, though, wasn't country targeting -- it
+was bot-block rate.** With this Firefox setup (real username/password
+auth, no country-targeting suffix, same query, same 5-attempt retry logic
+as production), a full 8-country test (28 total fetches, since 2
+countries needed all 5 attempts) produced **zero "BOT BLOCK" classifications
+at all**. Every single one of the 28 fetches was either a real success
+(6 of 8 countries, 5 of those on the very first attempt with no retry
+needed) or a confirmed genuine zero-result page (Ireland and UAE, all 5
+attempts each). Every prior Chrome-based test of any kind -- direct,
+IP-whitelisted proxy, or otherwise -- reliably produced real Cloudflare
+`"Just a moment..."` challenges somewhere in a full country sweep. Same
+proxy, same query, same retry logic, only the browser changed. Whatever
+Indeed's bot detection is actually keying on, it looks specific to
+something about Chrome (headless-automation fingerprint, TLS/JA3
+signature, or similar) rather than the residential IP itself -- which
+would also mean every earlier "block rate" finding in this log (the
+classifier rebuild, the retry-count bump, the sequential-call-delay
+experiment) was measured against a symptom of the browser choice, not a
+fundamental property of Indeed's defenses.
+
+**Wired into production**: `selenium_client.py` now launches
+`webdriver.Firefox` instead of `webdriver.Chrome`, and `ProxyConfig` is
+back to `(host, port, username, password)` -- real proxy auth via the
+Firefox WebExtension above, not IP-whitelist, since that removes the
+dependency on this specific machine's IP staying whitelisted with the
+provider that caused a real production outage earlier (a dynamic
+residential IP changed mid-week, silently blanking every Indeed fetch
+until noticed). Confirmed live against the real, wired-in code (not a
+throwaway test script): Selenium auto-discovered a normally-installed
+Firefox and auto-managed geckodriver via Selenium Manager exactly like it
+did for Chrome, no extra plumbing needed; a real fetch through the actual
+`fetch_html_via_selenium`/`ProxyConfig` returned 16 genuine job cards with
+`vjk` captured correctly. `LOCAL_SETUP.md` and `daily-digest.yml` updated
+from Chrome to Firefox accordingly (the latter still can't actually run
+end-to-end regardless, per its own existing caveats about the local LLM
+dependency).
+
+**Full production run confirms the picture is more nuanced than the
+isolated test above, but still a real win.** Ran the actual digest
+end-to-end (`scripts/run_digest_locally.sh`, all 8 countries, full
+pagination, real concurrency -- not just one page per country in
+isolation like the 28-fetch test above). This time, blocks did show up
+for real: 17 of 38 total Indeed Selenium fetches (~45%), concentrated in
+United States (12/16) and United Kingdom (5/8) -- so the earlier "zero
+blocks" result undersold the real-world rate once full pagination and
+concurrency are back in the picture, not just page 0 in isolation.
+
+**What held up, though: not one country was lost to exhausted retries.**
+Every country either got real cards or was a confirmed genuine zero --
+United States (64 cards) and United Kingdom (32 cards) both recovered
+fully despite their high individual-attempt block counts; Canada (12),
+Singapore (9), Australia (3), and New Zealand (3) all succeeded; Ireland
+and UAE both landed on confirmed genuine zeros (`is_confirmed_zero_result`),
+not blocks. Contrast with prior Chrome-based runs, where multiple
+countries routinely ended a run at 0 cards after exhausting all 5 retries
+against a real, unrecovered block -- that didn't happen anywhere in this
+run. Whole-digest result: Indeed found 50 candidates, 3 confirmed as
+genuine sponsorship offers; combined with LinkedIn, 44 total jobs sent
+successfully.
+
+So the more accurate framing: Firefox doesn't eliminate Indeed's bot
+detection, but it does seem to fail *less often per attempt* and, more
+importantly, its failures are recoverable by the existing 5-attempt retry
+loop in a way Chrome's often weren't. The classifier
+(`is_genuine_indeed_page`/`is_confirmed_zero_result`), 5-attempt retry
+count, and `indeed_sequential_call_delay_seconds` experiment all continued
+working correctly under Firefox with no changes needed -- confirmed via
+this same run's logs showing correct "BOT BLOCK failure" and "0 JOBS, not
+a bot block" classifications throughout.
+
+## Retired Decodo entirely -- LinkedIn moved (back) to Bright Data
+
+Standardized on a single scraping provider: LinkedIn's search and
+description fetches (`sources/linkedin/search.py`,
+`sources/linkedin/description.py`) now go through Bright Data's Web
+Unlocker instead of Decodo's Scraper API, matching what Indeed's
+description fetches already used (see "Indeed description fetches switched
+back from Decodo to Bright Data" above). Decodo had no comparable
+reliability complaint for LinkedIn specifically -- this wasn't a reliability
+fix, it was removing a second provider (and its own set of credentials,
+response-shape handling, and edge cases in `shared/http.py`) once Bright
+Data was already the more-tested, more-reliable option for the other
+source. `Settings.decodo_username`/`decodo_password` are gone;
+`shared/http.py`'s `_get_via_decodo` and `via_decodo=`/`decodo_*` params on
+`fetch_html()` are removed, leaving `via_brightdata` as the only proxied
+fetch path.
+
+**Bright Data requires an explicit `country` geo-pin param** (see the
+Indeed entry above for why), which LinkedIn's fetches never needed while
+on Decodo. LinkedIn's guest search endpoint is one global URL scoped by a
+`location` query param, not a per-country domain like Indeed, so the
+geo-pin is the only thing that targets the right country's exit node here.
+Added `sources/linkedin/country_codes.py::ISO_COUNTRY_CODES`, covering all
+17 countries in `queries.py`'s `_COUNTRIES` list (a superset of Indeed's
+8-country English-market list) -- `search.py` keys it off `query.location`,
+`description.py` off `card.query_country`.
+
+Reused the existing `brightdata_zone` (`linkedin_unlocker` -- named for its
+original purpose before LinkedIn briefly moved to Decodo and Bright Data
+took over Indeed instead) rather than provisioning a second zone; no new
+settings needed since `brightdata_api_key`/`brightdata_zone` already
+existed for Indeed.
+
+## `digest_run_timeout_seconds` doubled again, 1200s -> 2400s
+
+Two consecutive real local runs on 2026-08-11
+(`logs/digest_2026-08-11_06-00-05.log`, `logs/digest_2026-08-11_08-41-04.log`)
+both hit `asyncio.wait_for`'s 1200s cap and were killed mid-run --
+confirmed via each run's own traceback that this was a genuine
+`TimeoutError`, not a hang: the first died mid-way through LinkedIn's
+description fetches, the second got further (descriptions done, ~945
+Bright Data calls logged) but ran out of budget partway through LinkedIn's
+LLM-confirmation stage. Neither run showed any Decodo activity or Bright
+Data failures -- this was purely a timeout-sizing problem, coinciding with
+(not caused by) the same-day Decodo -> Bright Data migration for LinkedIn.
+
+LinkedIn alone now regularly surfaces 650-700+ raw candidates across its 17
+countries per run (confirmed across three separate runs this week), each
+needing a description fetch and an LLM-confirmation call -- more volume
+than the 1200s budget (already doubled once before, for Indeed's growth --
+see the entry above) was sized for, especially on a run where Indeed's own
+bot-block retry/backoff also burns wall-clock time concurrently. Doubled
+again to 2400s in `config.py`, `.env.example`, and this machine's `.env`.

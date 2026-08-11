@@ -19,8 +19,6 @@ def _settings(**overrides: object) -> Settings:
         gmail_address="a@b.com",
         gmail_app_password="pw",
         digest_recipients="me@example.com",
-        decodo_username="decodo-user",
-        decodo_password="decodo-pass",
     )
     defaults.update(overrides)
     return Settings(**defaults)

@@ -29,11 +29,14 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-## 3. Install Google Chrome
+## 3. Install Firefox
 
-Install it normally from google.com/chrome. Selenium 4's built-in
-Selenium Manager auto-downloads a matching chromedriver itself -- no
-separate driver install needed.
+Install it normally from mozilla.org/firefox. Selenium 4's built-in
+Selenium Manager auto-downloads a matching geckodriver itself -- no
+separate driver install needed. Indeed search used to run on Chrome;
+switched to Firefox after a live comparison (same residential proxy, same
+query) found Chrome reliably hitting real Cloudflare challenges that
+Firefox didn't -- see DECISIONS.md.
 
 ## 4. Install Docker Desktop and start the local sponsorship-confirmation LLM
 
@@ -68,8 +71,8 @@ cp .env.example .env
 ```
 
 Fill in real values for `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`,
-`DIGEST_RECIPIENTS`, `DECODO_USERNAME`, `DECODO_PASSWORD`,
-`BRIGHTDATA_API_KEY`, `BRIGHTDATA_ZONE`. `LLM_BASE_URL`/`LLM_MODEL`
+`DIGEST_RECIPIENTS`, `BRIGHTDATA_API_KEY`, `BRIGHTDATA_ZONE`.
+`LLM_BASE_URL`/`LLM_MODEL`
 already default to the local Docker Model Runner setup from step 4 and
 don't need a real secret. Everything else (concurrency caps, pagination
 limits, `INDEED_PAGE_SETTLE_SECONDS`, etc.) has a working default in

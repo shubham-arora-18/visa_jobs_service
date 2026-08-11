@@ -24,10 +24,10 @@ chromedriver, no separate driver install needed).
 
 Required `.env` values: `HF_TOKEN` (Hugging Face Inference Providers),
 `GMAIL_ADDRESS`/`GMAIL_APP_PASSWORD`/`DIGEST_RECIPIENTS` (email delivery),
-`DECODO_USERNAME`/`DECODO_PASSWORD` (LinkedIn scraping, and Indeed
-description-page fetches, via Decodo's Scraper API -- see `DECISIONS.md`).
-Indeed's *search* pages go through Selenium/a real headless Chrome
-instead of a proxy (see `sources/indeed/selenium_client.py`).
+`BRIGHTDATA_API_KEY`/`BRIGHTDATA_ZONE` (LinkedIn's search + description
+fetches, and Indeed's description fetches, via Bright Data's Web Unlocker
+-- see `DECISIONS.md`). Indeed's *search* pages go through Selenium/a real
+headless Chrome instead of a proxy (see `sources/indeed/selenium_client.py`).
 
 ## Run
 
@@ -55,8 +55,8 @@ sources (Indeed maps it to the closest `fromage` value it supports: 1/3/7/14
 days -- see `sources/indeed/search.py`). This runs all three sources
 concurrently, emails the combined digest to `DIGEST_RECIPIENTS`, and
 returns a JSON summary of what was found. A combined per-country
-breakdown of every Selenium (Indeed search) and Decodo (Indeed details,
-LinkedIn) call made during the run is logged at the end (see
+breakdown of every Selenium (Indeed search) and Bright Data (Indeed
+details, LinkedIn) call made during the run is logged at the end (see
 `shared/call_stats.py`).
 
 ## Scheduled daily run
@@ -71,7 +71,7 @@ CLI entry point (same `run_digest` logic as the API, defaulting to a
 `.github/workflows/daily-digest.yml` still exists for manual testing
 (`workflow_dispatch` only, no schedule) -- requires these set as repo
 secrets/variables: `HF_TOKEN`, `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`,
-`DECODO_USERNAME`, `DECODO_PASSWORD` (secrets), `DIGEST_RECIPIENTS`
+`BRIGHTDATA_API_KEY`, `BRIGHTDATA_ZONE` (secrets), `DIGEST_RECIPIENTS`
 (variable). Or just run the same command locally:
 
 ```bash

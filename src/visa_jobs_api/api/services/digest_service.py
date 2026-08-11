@@ -65,8 +65,8 @@ async def run_digest(
                 posted_within_hours=posted_within_hours,
             )
             # Logged even if a source fails partway through (finally, not
-            # after) -- this is exactly when knowing how many Bright
-            # Data/Decodo calls had already gone out is most useful.
+            # after) -- this is exactly when knowing how many Bright Data
+            # calls had already gone out is most useful.
             try:
                 jobs, failures = await asyncio.wait_for(
                     collect_jobs(sources), timeout=settings.digest_run_timeout_seconds
