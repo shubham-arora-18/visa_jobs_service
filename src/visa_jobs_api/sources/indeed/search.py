@@ -95,11 +95,18 @@ def _proxy_config(settings: Settings) -> ProxyConfig | None:
     (Selenium then connects directly -- see selenium_client.py's docstring)."""
     if settings.indeed_selenium_proxy_host is None:
         return None
-    # Settings._proxy_settings_are_all_or_nothing already guarantees this is
-    # set whenever the host is -- narrowing Optional for the type checker,
-    # not validating untrusted input.
+    # Settings._proxy_settings_are_all_or_nothing already guarantees these
+    # three are set whenever the host is -- narrowing Optional for the type
+    # checker, not validating untrusted input.
     assert settings.indeed_selenium_proxy_port is not None
-    return ProxyConfig(host=settings.indeed_selenium_proxy_host, port=settings.indeed_selenium_proxy_port)
+    assert settings.indeed_selenium_proxy_username is not None
+    assert settings.indeed_selenium_proxy_password is not None
+    return ProxyConfig(
+        host=settings.indeed_selenium_proxy_host,
+        port=settings.indeed_selenium_proxy_port,
+        username=settings.indeed_selenium_proxy_username,
+        password=settings.indeed_selenium_proxy_password,
+    )
 
 
 def _describe_zero_cards(html: str) -> str:
