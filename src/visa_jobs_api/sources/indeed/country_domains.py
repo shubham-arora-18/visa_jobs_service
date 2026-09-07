@@ -30,7 +30,7 @@ from __future__ import annotations
 
 # country -> Indeed domain
 COUNTRY_DOMAINS: dict[str, str] = {
-    "United States": "www.indeed.com",
+    # "United States": "www.indeed.com",  # temporarily disabled
     "Canada": "ca.indeed.com",
     "United Kingdom": "uk.indeed.com",
     "Ireland": "ie.indeed.com",

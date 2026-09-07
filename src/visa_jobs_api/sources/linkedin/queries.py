@@ -27,7 +27,7 @@ from visa_jobs_api.sources.linkedin.models import SearchQuery
 DEFAULT_KEYWORDS = '(Python OR Backend OR Java OR "distributed systems") AND (sponsor OR sponsorship OR "work authorization" OR expat)'
 
 _COUNTRIES = [
-    "United States",
+    # "United States",  # temporarily disabled
     "Canada",
     "United Kingdom",
     "Germany",
